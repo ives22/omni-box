@@ -94,6 +94,7 @@ export interface UserSettings {
   smartClipboard: boolean
   directTotpInSearch: boolean
   vaultAutoLockMinutes: number
+  vaultClipboardClearSeconds?: number
   accentColor: 'emerald' | 'sky' | 'violet' | 'amber'
   maxResultsCount: number
   aliases: Record<string, string> // alias -> target item.id
@@ -139,6 +140,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   smartClipboard: true,
   directTotpInSearch: true,
   vaultAutoLockMinutes: 15,
+  vaultClipboardClearSeconds: 30,
   accentColor: 'emerald',
   maxResultsCount: 14,
   aliases: {

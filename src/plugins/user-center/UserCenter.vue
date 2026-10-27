@@ -23,8 +23,12 @@ type TabKey =
   | 'all-features'
 
 const store = useLauncherStore()
-// Default to 'preferences' (基本设置) or 'account' (我的账号)
-const activeTab = ref<TabKey>('preferences')
+// Default to 'preferences' (基本设置) or dynamic initial tab requested by plugins
+const initialTabFromPlugin = (window as any).__omniboxUserCenterInitialTab as TabKey | undefined
+if (initialTabFromPlugin) {
+  delete (window as any).__omniboxUserCenterInitialTab
+}
+const activeTab = ref<TabKey>(initialTabFromPlugin || 'preferences')
 const isRescanning = ref(false)
 
 // Grouped Navigation Sidebar (uTools Reference Style: Short 4-char labels + Grouped sections)
@@ -56,9 +60,12 @@ const navGroups: {
 const newAliasKey = ref('')
 const newAliasTarget = ref('plugin:calc-pad')
 
-// Security Master Password Rotation State
+// Security Master Password Rotation & Vault Policy State
 const oldMasterPwd = ref('')
 const newMasterPwd = ref('')
+const showOldMasterPwd = ref(false)
+const showNewMasterPwd = ref(false)
+const vaultSessionUnlocked = ref(Boolean((window as any).__omniboxVaultSession))
 
 // Backup Snapshot State
 const snapshotJsonText = ref('')
@@ -289,15 +296,37 @@ async function handleRotateMasterPassword() {
     return
   }
   try {
+    const nextKey = newMasterPwd.value.trim()
     const plainJson = await decryptVaultData(oldMasterPwd.value.trim(), cipherBlob)
-    const reEncrypted = await encryptVaultData(newMasterPwd.value.trim(), plainJson)
+    const reEncrypted = await encryptVaultData(nextKey, plainJson)
     await kvPut('password-vault', 'cipher_blob', reEncrypted)
+    const globalObj = window as any
+    if (globalObj.__omniboxVaultSession) {
+      globalObj.__omniboxVaultSession.masterKey = nextKey
+      globalObj.__omniboxVaultSession.unlockedAt = Date.now()
+    }
     oldMasterPwd.value = ''
     newMasterPwd.value = ''
+    showOldMasterPwd.value = false
+    showNewMasterPwd.value = false
     store.showToast('主密码已更新，并使用 Argon2id + AES-256-GCM 重新加密全部条目')
   } catch {
     store.showToast('原主密码校验失败，无法更改', 'warning')
   }
+}
+
+function handleVaultAutoLockChange() {
+  if (store.userSettings.vaultAutoLockMinutes === 0) {
+    ;(window as any).__omniboxVaultSession = null
+    vaultSessionUnlocked.value = false
+  }
+  store.saveUserSettings()
+}
+
+function forceLockVaultNow() {
+  ;(window as any).__omniboxVaultSession = null
+  vaultSessionUnlocked.value = false
+  store.showToast('已擦除内存中的密码本密钥并立即锁定')
 }
 
 async function exportFullSnapshot() {
@@ -1317,54 +1346,114 @@ async function triggerWebdavSync() {
       <!-- ======================================================================= -->
       <template v-else-if="activeTab === 'security'">
         <div class="space-y-4 text-xs">
+          <!-- Card 1: Master Password Rotation + Auto-Lock Policy -->
           <div
-            class="p-4 rounded-2xl border space-y-3"
+            class="p-4 rounded-2xl border space-y-3.5"
             :class="
               store.isDark
                 ? 'bg-obsidian-950/50 border-slate-800'
                 : 'bg-white border-slate-200/80 shadow-[0_1px_3px_rgba(15,23,42,0.03)]'
             "
           >
-            <h3 class="font-bold text-[13px]">密码本主密码轮换 (Argon2id + AES-256-GCM)</h3>
-            <p class="text-[11px] text-slate-400">
-              更改主密码时，系统将验证旧主密码并使用新的 Argon2id 盐值重新加密所有密码条目（初始默认密码为
-              <code
-                class="font-mono px-1.5 py-0.5 rounded"
-                :class="
-                  store.isDark
-                    ? 'bg-indigo-500/15 text-indigo-300'
-                    : 'bg-indigo-50 text-indigo-600'
-                "
-              >
-                omnibox2026
-              </code>
-              ）
-            </p>
+            <div class="flex items-center justify-between gap-2">
+              <div>
+                <h3 class="font-bold text-[13px]">密码本主密码轮换与自动锁定策略 (Argon2id + AES-256-GCM)</h3>
+                <p class="text-[11px] text-slate-400 mt-0.5">
+                  更改主密码时，系统将验证旧主密码并使用新的 Argon2id 盐值重新加密所有密码条目（初始默认密码为
+                  <code
+                    class="font-mono px-1.5 py-0.5 rounded"
+                    :class="
+                      store.isDark
+                        ? 'bg-indigo-500/15 text-indigo-300'
+                        : 'bg-indigo-50 text-indigo-600'
+                    "
+                  >
+                    omnibox2026
+                  </code>
+                  ）
+                </p>
+              </div>
+              <div class="flex items-center gap-2 shrink-0">
+                <span
+                  class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border"
+                  :class="
+                    vaultSessionUnlocked
+                      ? store.isDark
+                        ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+                        : 'bg-emerald-50 border-emerald-200 text-emerald-600'
+                      : store.isDark
+                        ? 'bg-slate-800 border-slate-700 text-slate-400'
+                        : 'bg-slate-100 border-slate-200 text-slate-500'
+                  "
+                >
+                  <IconRenderer :name="vaultSessionUnlocked ? 'Unlock' : 'Lock'" :size="11" />
+                  <span>{{ vaultSessionUnlocked ? '当前已解锁' : '当前已锁定' }}</span>
+                </span>
+                <button
+                  v-if="vaultSessionUnlocked"
+                  type="button"
+                  class="px-2 py-1 rounded-lg text-[11px] font-medium border transition-colors cursor-pointer"
+                  :class="
+                    store.isDark
+                      ? 'bg-rose-500/15 border-rose-500/30 text-rose-300 hover:bg-rose-500/25'
+                      : 'bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100'
+                  "
+                  @click="forceLockVaultNow"
+                >
+                  立即锁定
+                </button>
+              </div>
+            </div>
+
             <div class="grid grid-cols-3 gap-2.5">
-              <input
-                v-model="oldMasterPwd"
-                type="password"
-                placeholder="当前主密码"
-                aria-label="当前主密码"
-                class="px-3 py-1.5 rounded-xl font-mono border outline-none focus:ring-2 focus:ring-indigo-500/25 focus:border-indigo-500"
-                :class="
-                  store.isDark
-                    ? 'bg-obsidian-950 border-slate-700 text-white'
-                    : 'bg-slate-50/70 border-slate-200/90 text-slate-800'
-                "
-              />
-              <input
-                v-model="newMasterPwd"
-                type="password"
-                placeholder="新主密码"
-                aria-label="新主密码"
-                class="px-3 py-1.5 rounded-xl font-mono border outline-none focus:ring-2 focus:ring-indigo-500/25 focus:border-indigo-500"
-                :class="
-                  store.isDark
-                    ? 'bg-obsidian-950 border-slate-700 text-white'
-                    : 'bg-slate-50/70 border-slate-200/90 text-slate-800'
-                "
-              />
+              <!-- Current Master Password Input with Eye Toggle -->
+              <div class="relative flex items-center">
+                <input
+                  v-model="oldMasterPwd"
+                  :type="showOldMasterPwd ? 'text' : 'password'"
+                  placeholder="当前主密码"
+                  aria-label="当前主密码"
+                  class="w-full pl-3 pr-8 py-1.5 rounded-xl font-mono border outline-none focus:ring-2 focus:ring-indigo-500/25 focus:border-indigo-500"
+                  :class="
+                    store.isDark
+                      ? 'bg-obsidian-950 border-slate-700 text-white'
+                      : 'bg-slate-50/70 border-slate-200/90 text-slate-800'
+                  "
+                />
+                <button
+                  type="button"
+                  class="absolute right-2 p-1 rounded text-slate-400 hover:text-indigo-500 transition-colors cursor-pointer"
+                  :title="showOldMasterPwd ? '隐藏当前主密码' : '查看当前主密码'"
+                  @click="showOldMasterPwd = !showOldMasterPwd"
+                >
+                  <IconRenderer :name="showOldMasterPwd ? 'EyeOff' : 'Eye'" :size="14" />
+                </button>
+              </div>
+
+              <!-- New Master Password Input with Eye Toggle -->
+              <div class="relative flex items-center">
+                <input
+                  v-model="newMasterPwd"
+                  :type="showNewMasterPwd ? 'text' : 'password'"
+                  placeholder="新主密码"
+                  aria-label="新主密码"
+                  class="w-full pl-3 pr-8 py-1.5 rounded-xl font-mono border outline-none focus:ring-2 focus:ring-indigo-500/25 focus:border-indigo-500"
+                  :class="
+                    store.isDark
+                      ? 'bg-obsidian-950 border-slate-700 text-white'
+                      : 'bg-slate-50/70 border-slate-200/90 text-slate-800'
+                  "
+                />
+                <button
+                  type="button"
+                  class="absolute right-2 p-1 rounded text-slate-400 hover:text-indigo-500 transition-colors cursor-pointer"
+                  :title="showNewMasterPwd ? '隐藏新主密码' : '查看新主密码'"
+                  @click="showNewMasterPwd = !showNewMasterPwd"
+                >
+                  <IconRenderer :name="showNewMasterPwd ? 'EyeOff' : 'Eye'" :size="14" />
+                </button>
+              </div>
+
               <button
                 type="button"
                 class="btn-primary"
@@ -1372,6 +1461,87 @@ async function triggerWebdavSync() {
               >
                 更新主密码
               </button>
+            </div>
+
+            <!-- Divider: Auto-Lock Duration & Clipboard Auto-Clear -->
+            <div
+              class="pt-3 border-t grid grid-cols-1 sm:grid-cols-2 gap-3"
+              :class="store.isDark ? 'border-slate-800/80' : 'border-slate-100'"
+            >
+              <!-- Setting 1: Auto-lock duration after unlock -->
+              <div
+                class="p-3 rounded-xl border flex items-center justify-between gap-2"
+                :class="
+                  store.isDark
+                    ? 'bg-obsidian-900/60 border-slate-800/90'
+                    : 'bg-slate-50/70 border-slate-200/70'
+                "
+              >
+                <div class="min-w-0">
+                  <div class="font-semibold text-[12px] flex items-center gap-1.5">
+                    <IconRenderer name="Clock" :size="13" class="text-indigo-500 shrink-0" />
+                    <span>解锁后自动锁定时间</span>
+                  </div>
+                  <div class="text-[11px] text-slate-400 mt-0.5">
+                    超时后自动擦除内存密钥并重新锁定
+                  </div>
+                </div>
+                <select
+                  v-model.number="store.userSettings.vaultAutoLockMinutes"
+                  aria-label="密码本解锁后自动锁定时间"
+                  class="px-2.5 py-1.5 rounded-lg text-xs font-medium border outline-none cursor-pointer shrink-0"
+                  :class="
+                    store.isDark
+                      ? 'bg-obsidian-950 border-slate-700 text-slate-200'
+                      : 'bg-white border-slate-200 text-slate-700 shadow-2xs'
+                  "
+                  @change="handleVaultAutoLockChange"
+                >
+                  <option :value="0">离开即刻锁定 (0分钟)</option>
+                  <option :value="1">1 分钟</option>
+                  <option :value="5">5 分钟</option>
+                  <option :value="15">15 分钟 (默认推荐)</option>
+                  <option :value="30">30 分钟</option>
+                  <option :value="60">60 分钟 (1小时)</option>
+                  <option :value="-1">应用运行期间保持解锁</option>
+                </select>
+              </div>
+
+              <!-- Setting 2: Auto-clear clipboard after copying sensitive password/AK/SK -->
+              <div
+                class="p-3 rounded-xl border flex items-center justify-between gap-2"
+                :class="
+                  store.isDark
+                    ? 'bg-obsidian-900/60 border-slate-800/90'
+                    : 'bg-slate-50/70 border-slate-200/70'
+                "
+              >
+                <div class="min-w-0">
+                  <div class="font-semibold text-[12px] flex items-center gap-1.5">
+                    <IconRenderer name="ClipboardCheck" :size="13" class="text-indigo-500 shrink-0" />
+                    <span>复制密码后自动清理剪贴板</span>
+                  </div>
+                  <div class="text-[11px] text-slate-400 mt-0.5">
+                    复制密码或 SK 后倒计时清空剪贴板防泄漏
+                  </div>
+                </div>
+                <select
+                  v-model.number="store.userSettings.vaultClipboardClearSeconds"
+                  aria-label="复制敏感密码后自动清理剪贴板时间"
+                  class="px-2.5 py-1.5 rounded-lg text-xs font-medium border outline-none cursor-pointer shrink-0"
+                  :class="
+                    store.isDark
+                      ? 'bg-obsidian-950 border-slate-700 text-slate-200'
+                      : 'bg-white border-slate-200 text-slate-700 shadow-2xs'
+                  "
+                  @change="store.saveUserSettings()"
+                >
+                  <option :value="0">不自动清理</option>
+                  <option :value="15">15 秒后清空</option>
+                  <option :value="30">30 秒后清空 (默认)</option>
+                  <option :value="60">60 秒后清空</option>
+                </select>
+              </div>
             </div>
           </div>
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useLauncherStore } from '@/stores/launcher'
 import {
   type VaultEntry,
@@ -28,7 +28,10 @@ interface SessionVaultCache {
   items: VaultEntry[]
   unlockedAt: number
 }
-const globalObj = window as unknown as { __omniboxVaultSession?: SessionVaultCache | null }
+const globalObj = window as unknown as {
+  __omniboxVaultSession?: SessionVaultCache | null
+  __omniboxUserCenterInitialTab?: string
+}
 
 const DEFAULT_VAULT_ITEMS: VaultEntry[] = [
   {
@@ -176,8 +179,16 @@ const DEFAULT_VAULT_ITEMS: VaultEntry[] = [
 
 const isUnlocked = ref(false)
 const masterPasswordInput = ref('omnibox2026')
+const showMasterPassword = ref(false)
 const currentMasterKey = ref('')
 const unlockError = ref('')
+
+const autoLockLabel = computed(() => {
+  const mins = store.userSettings.vaultAutoLockMinutes ?? 15
+  if (mins === 0) return '每次离开立即锁定'
+  if (mins < 0) return '本次应用运行期间保持解锁'
+  return `解锁后 ${mins} 分钟内切换窗口免重复输入主密码`
+})
 
 const vaultItems = ref<VaultEntry[]>([])
 const viewMode = ref<'table' | 'split'>('table')
@@ -384,6 +395,11 @@ function generateStrongPassword(): string {
 
 function syncSessionCache() {
   if (!isUnlocked.value || !currentMasterKey.value) return
+  const mins = store.userSettings.vaultAutoLockMinutes ?? 15
+  if (mins === 0) {
+    globalObj.__omniboxVaultSession = null
+    return
+  }
   globalObj.__omniboxVaultSession = {
     masterKey: currentMasterKey.value,
     items: JSON.parse(JSON.stringify(vaultItems.value)),
@@ -444,6 +460,11 @@ function lockVault() {
   store.showToast('密码本已安全锁定，内存密钥已擦除', 'info')
 }
 
+function openSecuritySettings() {
+  globalObj.__omniboxUserCenterInitialTab = 'security'
+  store.openPlugin('user-center')
+}
+
 function toggleRevealSub(subId: string) {
   revealedSubIds.value[subId] = !revealedSubIds.value[subId]
 }
@@ -451,6 +472,8 @@ function toggleRevealSub(subId: string) {
 function isSubPasswordVisible(subId: string): boolean {
   return globalShowPasswords.value || !!revealedSubIds.value[subId]
 }
+
+let clipboardClearTimer: ReturnType<typeof setTimeout> | null = null
 
 async function copyField(text: string | undefined, label: string) {
   const clean = (text || '').trim()
@@ -460,7 +483,26 @@ async function copyField(text: string | undefined, label: string) {
   }
   await navigator.clipboard.writeText(clean)
   syncSessionCache()
-  store.showToast(`已复制 ${label}`)
+
+  const isSecret = /密码|Secret|SK|AK|密钥/i.test(label)
+  const clearSec = store.userSettings.vaultClipboardClearSeconds ?? 30
+
+  if (isSecret && clearSec > 0) {
+    if (clipboardClearTimer) clearTimeout(clipboardClearTimer)
+    clipboardClearTimer = setTimeout(async () => {
+      try {
+        const currentClip = await navigator.clipboard.readText()
+        if (currentClip === clean) {
+          await navigator.clipboard.writeText('')
+        }
+      } catch {
+        // ignore if window not focused
+      }
+    }, clearSec * 1000)
+    store.showToast(`已复制 ${label}（${clearSec} 秒后自动清空剪贴板）`)
+  } else {
+    store.showToast(`已复制 ${label}`)
+  }
 }
 
 function openExternalUrl(rawUrl: string) {
@@ -838,17 +880,40 @@ async function exportVaultAsTsv() {
   store.showToast('已将当前筛选账密按 Excel 表格格式复制到剪贴板，可直接粘贴至 Excel！')
 }
 
+let autoLockCheckInterval: ReturnType<typeof setInterval> | null = null
+
 onMounted(() => {
   generateStrongPassword()
   // Check if session cache is still valid within auto-lock window
   const cached = globalObj.__omniboxVaultSession
-  const autoLockMs = (store.userSettings.vaultAutoLockMinutes || 15) * 60 * 1000
-  if (cached && Date.now() - cached.unlockedAt < autoLockMs) {
-    currentMasterKey.value = cached.masterKey
-    vaultItems.value = cached.items
-    isUnlocked.value = true
-    selectedId.value = vaultItems.value[0]?.id || ''
-    cached.unlockedAt = Date.now()
+  const mins = store.userSettings.vaultAutoLockMinutes ?? 15
+  if (cached && mins !== 0) {
+    const isValid = mins < 0 || Date.now() - cached.unlockedAt < mins * 60 * 1000
+    if (isValid) {
+      currentMasterKey.value = cached.masterKey
+      vaultItems.value = cached.items
+      isUnlocked.value = true
+      selectedId.value = vaultItems.value[0]?.id || ''
+      cached.unlockedAt = Date.now()
+    } else {
+      globalObj.__omniboxVaultSession = null
+    }
+  }
+
+  autoLockCheckInterval = setInterval(() => {
+    if (!isUnlocked.value) return
+    const lockMins = store.userSettings.vaultAutoLockMinutes ?? 15
+    if (lockMins <= 0) return
+    const session = globalObj.__omniboxVaultSession
+    if (session && Date.now() - session.unlockedAt >= lockMins * 60 * 1000) {
+      lockVault()
+    }
+  }, 5000)
+})
+
+onUnmounted(() => {
+  if (autoLockCheckInterval) {
+    clearInterval(autoLockCheckInterval)
   }
 })
 </script>
@@ -878,27 +943,68 @@ onMounted(() => {
         研发与基础设施密码本已锁定
       </h2>
       <p class="mt-1 text-xs text-slate-400 max-w-md">
-        采用 <code class="font-mono text-indigo-500">Argon2id</code> + <code class="font-mono text-indigo-500">AES-256-GCM</code> 本地加密，解锁后 {{ store.userSettings.vaultAutoLockMinutes || 15 }} 分钟内切换窗口免重复输入主密码
+        采用 <code class="font-mono text-indigo-500">Argon2id</code> + <code class="font-mono text-indigo-500">AES-256-GCM</code> 本地加密，{{ autoLockLabel }}
       </p>
 
       <form class="mt-5 w-full max-w-xs space-y-3" @submit.prevent="handleUnlock">
-        <input
-          v-model="masterPasswordInput"
-          type="password"
-          placeholder="输入主密码 (演示默认: omnibox2026)"
-          aria-label="密码本主密码输入框"
-          class="w-full px-3.5 py-2 rounded-xl text-sm font-mono border outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500"
-          :class="
-            store.isDark
-              ? 'bg-obsidian-950 border-slate-700 text-white'
-              : 'bg-white border-slate-200/90 text-slate-900 shadow-2xs'
-          "
-        />
+        <div class="relative flex items-center">
+          <input
+            v-model="masterPasswordInput"
+            :type="showMasterPassword ? 'text' : 'password'"
+            placeholder="输入主密码 (演示默认: omnibox2026)"
+            aria-label="密码本主密码输入框"
+            class="w-full pl-3.5 pr-9 py-2 rounded-xl text-sm font-mono border outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-500"
+            :class="
+              store.isDark
+                ? 'bg-obsidian-950 border-slate-700 text-white'
+                : 'bg-white border-slate-200/90 text-slate-900 shadow-2xs'
+            "
+          />
+          <button
+            type="button"
+            class="absolute right-2.5 p-1 rounded-md text-slate-400 hover:text-indigo-500 transition-colors cursor-pointer"
+            :title="showMasterPassword ? '隐藏主密码' : '查看主密码'"
+            :aria-label="showMasterPassword ? '隐藏主密码' : '查看主密码'"
+            @click="showMasterPassword = !showMasterPassword"
+          >
+            <IconRenderer :name="showMasterPassword ? 'EyeOff' : 'Eye'" :size="15" />
+          </button>
+        </div>
         <p v-if="unlockError" class="text-xs text-rose-500">{{ unlockError }}</p>
         <button type="submit" class="btn-primary w-full !py-2">
           <IconRenderer name="Unlock" :size="14" />
           <span>验证主密码并解锁保险箱</span>
         </button>
+
+        <!-- Quick Auto-Lock Duration & Security Settings Link -->
+        <div class="pt-1 flex items-center justify-between text-[11px] text-slate-400">
+          <div class="flex items-center gap-1">
+            <IconRenderer name="Clock" :size="12" class="text-slate-400" />
+            <span>免密锁定:</span>
+            <select
+              v-model.number="store.userSettings.vaultAutoLockMinutes"
+              aria-label="选择解锁后自动锁定时间"
+              class="bg-transparent font-medium text-indigo-500 outline-none cursor-pointer hover:underline"
+              @change="store.saveUserSettings()"
+            >
+              <option :value="0">离开即锁</option>
+              <option :value="1">1 分钟</option>
+              <option :value="5">5 分钟</option>
+              <option :value="15">15 分钟</option>
+              <option :value="30">30 分钟</option>
+              <option :value="60">60 分钟</option>
+              <option :value="-1">运行期间不锁</option>
+            </select>
+          </div>
+          <button
+            type="button"
+            class="flex items-center gap-1 hover:text-indigo-500 transition-colors cursor-pointer"
+            @click="openSecuritySettings"
+          >
+            <IconRenderer name="Shield" :size="12" />
+            <span>修改密码与安全设置</span>
+          </button>
+        </div>
       </form>
     </div>
 
