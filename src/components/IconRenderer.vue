@@ -54,7 +54,12 @@ import {
   ImageUp,
   ClipboardPaste,
   Bookmark,
-  Pencil
+  Pencil,
+  Undo2,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
+  WrapText
 } from 'lucide-vue-next'
 
 const props = withDefaults(
@@ -125,7 +130,12 @@ const iconMap: Record<string, unknown> = {
   ImageUp,
   ClipboardPaste,
   Bookmark,
-  Pencil
+  Pencil,
+  Undo2,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUpDown,
+  WrapText
 }
 
 const resolvedIcon = computed(() => {
