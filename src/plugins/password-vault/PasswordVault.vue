@@ -1442,7 +1442,7 @@ onMounted(() => {
                         <span>
                           {{ isSubPasswordVisible(sub.id) ? sub.password : '••••••••' }}
                         </span>
-                        <span class="text-[10px] font-sans font-semibold text-indigo-500 shrink-0">复制</span>
+                        <IconRenderer name="Copy" :size="11" class="text-indigo-400 shrink-0 opacity-85" />
                       </button>
                     </div>
 
@@ -1465,7 +1465,7 @@ onMounted(() => {
                       >
                         <span class="font-sans font-semibold">AK:</span>
                         <span>{{ sub.accessKeyId }}</span>
-                        <IconRenderer name="Copy" :size="9" />
+                        <IconRenderer name="Copy" :size="10" />
                       </button>
 
                       <button
@@ -1480,8 +1480,8 @@ onMounted(() => {
                         title="点击复制 AccessKey Secret (SK)"
                         @click="copyField(sub.accessKeySecret, 'AccessKey Secret (SK)')"
                       >
-                        <span class="font-sans font-semibold">复制 SK</span>
-                        <IconRenderer name="Copy" :size="9" />
+                        <span class="font-sans font-semibold">SK</span>
+                        <IconRenderer name="Copy" :size="10" />
                       </button>
                     </div>
 
