@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useLauncherStore } from '@/stores/launcher'
 import {
   CORE_PLUGIN_ITEMS,
@@ -23,12 +23,28 @@ type TabKey =
   | 'all-features'
 
 const store = useLauncherStore()
-// Default to 'preferences' (基本设置) or dynamic initial tab requested by plugins
+// Default to 'preferences' (基本设置) or dynamic initial tab requested by plugins / sessionStorage
 const initialTabFromPlugin = (window as any).__omniboxUserCenterInitialTab as TabKey | undefined
 if (initialTabFromPlugin) {
   delete (window as any).__omniboxUserCenterInitialTab
 }
-const activeTab = ref<TabKey>(initialTabFromPlugin || 'preferences')
+const savedTab =
+  typeof sessionStorage !== 'undefined'
+    ? (sessionStorage.getItem('omnibox:user-center-tab') as TabKey | null)
+    : null
+const activeTab = ref<TabKey>(initialTabFromPlugin || savedTab || 'preferences')
+watch(
+  activeTab,
+  (val) => {
+    try {
+      sessionStorage.setItem('omnibox:user-center-tab', val)
+    } catch {
+      // ignore
+    }
+    vaultSessionUnlocked.value = Boolean((window as any).__omniboxVaultSession)
+  },
+  { immediate: true }
+)
 const isRescanning = ref(false)
 
 // Grouped Navigation Sidebar (uTools Reference Style: Short 4-char labels + Grouped sections)
@@ -68,12 +84,19 @@ const showNewMasterPwd = ref(false)
 const vaultSessionUnlocked = ref(Boolean((window as any).__omniboxVaultSession))
 
 // Ensure default values are populated even for legacy persisted userSettings
-if (store.userSettings.vaultAutoLockMinutes === undefined) {
-  store.userSettings.vaultAutoLockMinutes = 15
-}
-if (store.userSettings.vaultClipboardClearSeconds === undefined) {
-  store.userSettings.vaultClipboardClearSeconds = 30
-}
+const vaultAutoLockModel = computed({
+  get: () => store.userSettings.vaultAutoLockMinutes ?? 15,
+  set: (val: number) => {
+    store.userSettings.vaultAutoLockMinutes = val
+  }
+})
+
+const vaultClipboardClearModel = computed({
+  get: () => store.userSettings.vaultClipboardClearSeconds ?? 30,
+  set: (val: number) => {
+    store.userSettings.vaultClipboardClearSeconds = val
+  }
+})
 
 // Backup Snapshot State
 const snapshotJsonText = ref('')
@@ -1495,7 +1518,7 @@ async function triggerWebdavSync() {
                   </div>
                 </div>
                 <select
-                  v-model.number="store.userSettings.vaultAutoLockMinutes"
+                  v-model.number="vaultAutoLockModel"
                   aria-label="密码本解锁后自动锁定时间"
                   class="px-3 py-1.5 rounded-lg text-xs font-medium border outline-none cursor-pointer shrink-0 min-w-[175px]"
                   :class="
@@ -1534,7 +1557,7 @@ async function triggerWebdavSync() {
                   </div>
                 </div>
                 <select
-                  v-model.number="store.userSettings.vaultClipboardClearSeconds"
+                  v-model.number="vaultClipboardClearModel"
                   aria-label="复制敏感密码后自动清理剪贴板时间"
                   class="px-3 py-1.5 rounded-lg text-xs font-medium border outline-none cursor-pointer shrink-0 min-w-[175px]"
                   :class="
