@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capabilities for main launcher and all detached standalone plugin windows",
+  "windows": ["*"],
+  "permissions": [
+    "core:default"
+  ]
+}

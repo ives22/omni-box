@@ -1,0 +1,23 @@
+[package]
+name = "omni-box"
+version = "0.1.0"
+description = "Ultra-fast desktop command launcher & micro-app container"
+authors = ["OmniBox Team"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+pinyin = "0.10"
+rusqlite = { version = "0.32", features = ["bundled"] }
+aes-gcm = "0.10"
+argon2 = "0.5"
+hmac = "0.12"
+sha1 = "0.10"
+rand = "0.8"
+base64 = "0.22"
+dirs = "5.0"
