@@ -904,64 +904,76 @@ onMounted(() => {
 
     <!-- State 2: Unlocked Vault Workspace -->
     <div v-else class="flex-1 flex flex-col min-h-0 overflow-hidden">
-      <!-- Top Control & Filter Bar -->
+      <!-- Single-Row Compact Control & Filter Bar -->
       <div
-        class="px-3.5 py-2 border-b flex flex-wrap items-center justify-between gap-2 shrink-0"
+        class="px-3.5 py-2 border-b flex items-center justify-between gap-2 shrink-0"
         :class="store.isDark ? 'bg-obsidian-950/60 border-slate-800/80' : 'bg-white border-slate-200/80'"
       >
-        <!-- Left: Category Tabs & Environment Filter Pills -->
-        <div class="flex items-center gap-2 flex-wrap">
-          <div
-            class="flex items-center p-0.5 rounded-lg border"
-            :class="store.isDark ? 'bg-obsidian-900 border-slate-800' : 'bg-slate-100 border-slate-200/80'"
-          >
-            <button
-              v-for="cat in categories"
-              :key="cat"
-              type="button"
-              class="px-2.5 py-1 rounded-md text-[11px] font-medium cursor-pointer transition-colors"
+        <!-- Left: Compact Dropdown Filters (Category + Environment) & Summary -->
+        <div class="flex items-center gap-2 min-w-0">
+          <!-- Category Dropdown -->
+          <div class="relative flex items-center">
+            <select
+              v-model="selectedCategory"
+              aria-label="按分类筛选密码本"
+              class="h-7 pl-2.5 pr-6 rounded-lg text-xs font-medium border outline-none cursor-pointer transition-colors"
               :class="
-                selectedCategory === cat
+                selectedCategory !== '全部'
                   ? store.isDark
-                    ? 'bg-indigo-500/25 text-indigo-300 shadow-2xs'
-                    : 'bg-white text-indigo-600 shadow-2xs'
-                  : 'text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                    ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300'
+                    : 'bg-indigo-50 border-indigo-300 text-indigo-700'
+                  : store.isDark
+                    ? 'bg-obsidian-900 border-slate-700/90 text-slate-200 hover:border-slate-600'
+                    : 'bg-slate-100/90 border-slate-200/90 text-slate-700 hover:border-slate-300'
               "
-              @click="selectedCategory = cat"
             >
-              {{ cat }}
-            </button>
+              <option v-for="cat in categories" :key="cat" :value="cat">
+                {{ cat === '全部' ? '全部分类' : `分类: ${cat}` }}
+              </option>
+            </select>
           </div>
 
-          <!-- Env Pills -->
-          <div class="flex items-center gap-1">
-            <button
-              v-for="envOpt in envFilterOptions"
-              :key="envOpt.key"
-              type="button"
-              class="px-2 py-0.5 rounded-md text-[10px] font-mono border cursor-pointer transition-all"
+          <!-- Environment Dropdown -->
+          <div class="relative flex items-center">
+            <select
+              v-model="selectedEnv"
+              aria-label="按环境筛选密码本"
+              class="h-7 pl-2.5 pr-6 rounded-lg text-xs font-medium border outline-none cursor-pointer transition-colors"
               :class="
-                selectedEnv === envOpt.key
-                  ? envOpt.key === 'PROD'
-                    ? 'bg-rose-500 text-white border-rose-500 font-bold shadow-2xs'
-                    : 'bg-indigo-600 text-white border-indigo-600 font-semibold'
-                  : envOpt.key === 'PROD'
+                selectedEnv === 'PROD'
+                  ? 'bg-rose-500/15 border-rose-500/40 text-rose-600 dark:text-rose-300 font-bold'
+                  : selectedEnv !== 'ALL'
                     ? store.isDark
-                      ? 'bg-rose-500/10 text-rose-300 border-rose-500/30 hover:bg-rose-500/20'
-                      : 'bg-rose-50 text-rose-600 border-rose-200 hover:bg-rose-100'
+                      ? 'bg-indigo-500/20 border-indigo-500/40 text-indigo-300'
+                      : 'bg-indigo-50 border-indigo-300 text-indigo-700'
                     : store.isDark
-                      ? 'bg-slate-800/70 text-slate-400 border-slate-700/80 hover:text-slate-200'
-                      : 'bg-slate-100 text-slate-500 border-slate-200 hover:text-slate-800'
+                      ? 'bg-obsidian-900 border-slate-700/90 text-slate-200 hover:border-slate-600'
+                      : 'bg-slate-100/90 border-slate-200/90 text-slate-700 hover:border-slate-300'
               "
-              @click="selectedEnv = envOpt.key"
             >
-              {{ envOpt.label }}
-            </button>
+              <option v-for="envOpt in envFilterOptions" :key="envOpt.key" :value="envOpt.key">
+                {{ envOpt.label }}
+              </option>
+            </select>
           </div>
+
+          <!-- Quick Reset if Filtered -->
+          <button
+            v-if="selectedCategory !== '全部' || selectedEnv !== 'ALL'"
+            type="button"
+            class="px-1.5 py-0.5 rounded text-[11px] text-slate-400 hover:text-indigo-500 cursor-pointer"
+            @click="selectedCategory = '全部'; selectedEnv = 'ALL'"
+          >
+            重置
+          </button>
+
+          <span class="text-[11px] text-slate-400 hidden sm:inline truncate">
+            {{ filteredItems.length }} 个资源 · {{ totalSubAccountCount }} 组账号
+          </span>
         </div>
 
         <!-- Right: View Switcher & Batch Actions -->
-        <div class="flex items-center gap-1.5">
+        <div class="flex items-center gap-1.5 shrink-0">
           <!-- View Mode Toggle -->
           <div
             class="flex items-center p-0.5 rounded-lg border"
@@ -1013,7 +1025,7 @@ onMounted(() => {
 
           <button
             type="button"
-            class="btn-secondary !py-1 !px-2.5 text-[11px]"
+            class="btn-secondary !py-1 !px-2 text-[11px]"
             title="从 Excel 框选复制并粘贴批量导入"
             @click="openExcelImportModal"
           >
@@ -1023,8 +1035,8 @@ onMounted(() => {
 
           <button
             type="button"
-            class="btn-secondary !py-1 !px-2 text-[11px]"
-            title="复制为 Excel 表格格式"
+            class="btn-secondary !py-1 !px-1.5 text-[11px]"
+            title="导出复制为 Excel 表格格式"
             @click="exportVaultAsTsv"
           >
             <IconRenderer name="Download" :size="13" />
@@ -1032,7 +1044,7 @@ onMounted(() => {
 
           <button
             type="button"
-            class="btn-secondary !py-1 !px-2 text-[11px]"
+            class="btn-secondary !py-1 !px-1.5 text-[11px]"
             title="展开/收起随机密码生成器"
             @click="showGeneratorBar = !showGeneratorBar"
           >
@@ -1113,395 +1125,400 @@ onMounted(() => {
         </div>
       </div>
 
-      <!-- MODE A: High-Density Excel-like Matrix Table View -->
+      <!-- MODE A: Strict-Column-Aligned Excel Matrix View (No Horizontal Overflow, No Overlapping) -->
       <div
         v-if="viewMode === 'table'"
-        class="flex-1 overflow-auto min-h-0"
+        class="flex-1 overflow-y-auto overflow-x-hidden min-h-0 flex flex-col"
       >
-        <table class="w-full border-collapse text-left text-xs">
-          <thead
-            class="sticky top-0 z-10 text-[11px] font-semibold border-b"
-            :class="
-              store.isDark
-                ? 'bg-[#111726]/95 text-slate-400 border-slate-800 backdrop-blur-md'
-                : 'bg-slate-100/95 text-slate-500 border-slate-200/90 backdrop-blur-md'
-            "
+        <!-- Sticky Table Header with Fixed Column Proportions -->
+        <div
+          class="sticky top-0 z-10 flex items-center text-[11px] font-semibold border-b shrink-0"
+          :class="
+            store.isDark
+              ? 'bg-[#111726]/95 text-slate-400 border-slate-800 backdrop-blur-md'
+              : 'bg-slate-100/95 text-slate-500 border-slate-200/90 backdrop-blur-md'
+          "
+        >
+          <div
+            class="w-[165px] shrink-0 py-2 px-3 border-r"
+            :class="store.isDark ? 'border-slate-800/80' : 'border-slate-200/70'"
           >
-            <tr>
-              <th class="py-2 px-3 w-[190px] border-r" :class="store.isDark ? 'border-slate-800/80' : 'border-slate-200/70'">
-                环境 / 平台与组件 ({{ filteredItems.length }})
-              </th>
-              <th class="py-2 px-3 w-[235px] border-r" :class="store.isDark ? 'border-slate-800/80' : 'border-slate-200/70'">
-                访问地址 (URL / 外网 Pub / 内网 Priv)
-              </th>
-              <th class="py-2 px-3 border-r" :class="store.isDark ? 'border-slate-800/80' : 'border-slate-200/70'">
-                角色 · 登录账号 · 密码 · 扩展密钥 (共 {{ totalSubAccountCount }} 组账号，点击胶囊直接复制)
-              </th>
-              <th class="py-2 px-2.5 w-[96px] text-right">实例维护</th>
-            </tr>
-          </thead>
+            环境 / 平台与组件
+          </div>
+          <div
+            class="w-[215px] shrink-0 py-2 px-3 border-r"
+            :class="store.isDark ? 'border-slate-800/80' : 'border-slate-200/70'"
+          >
+            连接地址 (点击复制)
+          </div>
+          <!-- Sub-Account 3 Aligned Columns Header -->
+          <div
+            class="flex-1 min-w-0 grid grid-cols-12 items-center border-r"
+            :class="store.isDark ? 'border-slate-800/80' : 'border-slate-200/70'"
+          >
+            <div
+              class="col-span-4 py-2 px-2.5 border-r"
+              :class="store.isDark ? 'border-slate-800/60' : 'border-slate-200/60'"
+            >
+              角色 / 登录账号
+            </div>
+            <div
+              class="col-span-5 py-2 px-2.5 border-r"
+              :class="store.isDark ? 'border-slate-800/60' : 'border-slate-200/60'"
+            >
+              密码 / 扩展密钥 (AK·SK)
+            </div>
+            <div class="col-span-3 py-2 px-2.5">
+              备注说明
+            </div>
+          </div>
+          <div class="w-[88px] shrink-0 py-2 px-2 text-right">
+            维护操作
+          </div>
+        </div>
 
-          <tbody class="divide-y" :class="store.isDark ? 'divide-slate-800/80' : 'divide-slate-200/80'">
-            <tr v-if="filteredItems.length === 0">
-              <td colspan="4" class="py-14 text-center text-slate-400">
-                <div class="flex flex-col items-center gap-2">
-                  <IconRenderer name="KeyRound" :size="24" class="opacity-40" />
-                  <p>当前筛选条件下暂无密保条目</p>
-                  <div class="flex items-center gap-2 mt-1">
-                    <button type="button" class="btn-primary !py-1 !px-3 text-xs" @click="openCreateModal()">
-                      + 新增资源条目
-                    </button>
-                    <button type="button" class="btn-secondary !py-1 !px-3 text-xs" @click="openExcelImportModal">
-                      从 Excel 粘贴导入
-                    </button>
-                  </div>
-                </div>
-              </td>
-            </tr>
+        <!-- Empty State -->
+        <div v-if="filteredItems.length === 0" class="py-16 text-center text-slate-400 text-xs">
+          <div class="flex flex-col items-center gap-2">
+            <IconRenderer name="KeyRound" :size="24" class="opacity-40" />
+            <p>当前筛选条件下暂无密保条目</p>
+            <div class="flex items-center gap-2 mt-1">
+              <button type="button" class="btn-primary !py-1 !px-3 text-xs" @click="openCreateModal()">
+                + 新增资源条目
+              </button>
+              <button type="button" class="btn-secondary !py-1 !px-3 text-xs" @click="openExcelImportModal">
+                从 Excel 粘贴导入
+              </button>
+            </div>
+          </div>
+        </div>
 
-            <tr
-              v-for="item in filteredItems"
-              :key="item.id"
-              class="transition-colors align-top group"
+        <!-- Matrix Data Rows -->
+        <div class="divide-y text-xs" :class="store.isDark ? 'divide-slate-800/80' : 'divide-slate-200/80'">
+          <div
+            v-for="item in filteredItems"
+            :key="item.id"
+            class="flex items-stretch transition-colors group"
+            :class="[
+              item.env === 'PROD'
+                ? store.isDark
+                  ? 'bg-rose-950/15 hover:bg-rose-950/25'
+                  : 'bg-rose-50/40 hover:bg-rose-50/75'
+                : store.isDark
+                  ? 'hover:bg-slate-800/30'
+                  : 'hover:bg-slate-50/90'
+            ]"
+          >
+            <!-- Col 1: Environment + Platform Title (165px fixed) -->
+            <div
+              class="w-[165px] shrink-0 py-2.5 px-3 border-r flex flex-col justify-center"
               :class="[
-                item.env === 'PROD'
-                  ? store.isDark
-                    ? 'bg-rose-950/15 hover:bg-rose-950/25'
-                    : 'bg-rose-50/45 hover:bg-rose-50/80'
-                  : store.isDark
-                    ? 'hover:bg-slate-800/30'
-                    : 'hover:bg-slate-50/90'
+                store.isDark ? 'border-slate-800/80' : 'border-slate-200/70',
+                item.env === 'PROD' ? 'border-l-[3px] border-l-rose-500' : ''
               ]"
             >
-              <!-- Col 1: Environment + Platform / Component / Module (Merged Instance Header Cell) -->
-              <td
-                class="py-2.5 px-3 border-r relative"
-                :class="[
-                  store.isDark ? 'border-slate-800/80' : 'border-slate-200/70',
-                  item.env === 'PROD' ? 'border-l-[3px] border-l-rose-500' : ''
-                ]"
-              >
-                <div class="flex items-center gap-1.5 flex-wrap">
-                  <span
-                    class="px-1.5 py-0.5 rounded text-[10px] font-mono border leading-none"
-                    :class="envBadgeClass(item.env)"
-                  >
-                    {{ item.env || 'COMMON' }}
-                  </span>
-                  <span
-                    class="text-[10px] px-1.5 py-0.5 rounded"
-                    :class="store.isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-200/70 text-slate-600'"
-                  >
-                    {{ item.category }}
-                  </span>
-                </div>
-
-                <div
-                  class="font-bold text-xs mt-1.5 leading-snug break-words"
-                  :class="store.isDark ? 'text-slate-100' : 'text-slate-900'"
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span
+                  class="px-1.5 py-0.5 rounded text-[10px] font-mono border leading-none"
+                  :class="envBadgeClass(item.env)"
                 >
-                  {{ item.title }}
-                </div>
-
-                <div
-                  v-if="item.notes && getEffectiveAccounts(item).length > 1"
-                  class="text-[11px] text-slate-400 mt-1 line-clamp-2"
-                  :title="item.notes"
+                  {{ item.env || 'COMMON' }}
+                </span>
+                <span
+                  class="text-[10px] px-1.5 py-0.5 rounded truncate max-w-[85px]"
+                  :class="store.isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-200/70 text-slate-600'"
                 >
-                  {{ item.notes }}
-                </div>
-              </td>
-
-              <!-- Col 2: Public / Private / Web URL Endpoints (One-click Copy Chips) -->
-              <td
-                class="py-2.5 px-3 border-r font-mono text-[11px]"
-                :class="store.isDark ? 'border-slate-800/80' : 'border-slate-200/70'"
+                  {{ item.category }}
+                </span>
+              </div>
+              <div
+                class="font-bold text-xs mt-1.5 leading-snug break-words"
+                :class="store.isDark ? 'text-slate-100' : 'text-slate-900'"
+                :title="item.title"
               >
-                <div class="space-y-1.5">
-                  <!-- Database Dual Address: Public + Private -->
-                  <template v-if="item.publicAddress || item.privateAddress">
-                    <div
-                      v-if="item.publicAddress"
-                      class="flex items-center justify-between gap-1.5 px-2 py-1 rounded-lg border cursor-pointer transition-colors"
-                      :class="
-                        store.isDark
-                          ? 'bg-obsidian-950/70 border-slate-800 hover:border-indigo-500/50 text-slate-300'
-                          : 'bg-white border-slate-200/90 hover:border-indigo-400 text-slate-700 shadow-2xs'
-                      "
-                      :title="`点击复制外网连接串 (Pub): ${item.publicAddress}`"
-                      @click="copyField(item.publicAddress, `${item.title} 外网地址(Pub)`)"
-                    >
-                      <div class="min-w-0 flex-1 flex items-center gap-1.5">
-                        <span class="px-1 py-0.2 rounded text-[9px] font-sans font-semibold bg-sky-500/15 text-sky-500 shrink-0">
-                          外网 Pub
-                        </span>
-                        <span class="truncate">{{ item.publicAddress }}</span>
-                      </div>
-                      <IconRenderer name="Copy" :size="11" class="text-slate-400 shrink-0" />
-                    </div>
+                {{ item.title }}
+              </div>
+            </div>
 
-                    <div
-                      v-if="item.privateAddress"
-                      class="flex items-center justify-between gap-1.5 px-2 py-1 rounded-lg border cursor-pointer transition-colors"
-                      :class="
-                        store.isDark
-                          ? 'bg-obsidian-950/70 border-slate-800 hover:border-emerald-500/50 text-slate-300'
-                          : 'bg-white border-slate-200/90 hover:border-emerald-400 text-slate-700 shadow-2xs'
-                      "
-                      :title="`点击复制内网连接串 (Private): ${item.privateAddress}`"
-                      @click="copyField(item.privateAddress, `${item.title} 内网地址(Private)`)"
-                    >
-                      <div class="min-w-0 flex-1 flex items-center gap-1.5">
-                        <span class="px-1 py-0.2 rounded text-[9px] font-sans font-semibold bg-emerald-500/15 text-emerald-500 shrink-0">
-                          内网 Priv
-                        </span>
-                        <span class="truncate">{{ item.privateAddress }}</span>
-                      </div>
-                      <IconRenderer name="Copy" :size="11" class="text-slate-400 shrink-0" />
-                    </div>
-                  </template>
+            <!-- Col 2: Endpoints / Dual Addresses (215px fixed, strict truncate) -->
+            <div
+              class="w-[215px] shrink-0 py-2 px-2.5 border-r flex flex-col justify-center gap-1.5 font-mono text-[11px]"
+              :class="store.isDark ? 'border-slate-800/80' : 'border-slate-200/70'"
+            >
+              <template v-if="item.publicAddress || item.privateAddress">
+                <button
+                  v-if="item.publicAddress"
+                  type="button"
+                  class="w-full flex items-center justify-between gap-1.5 px-2 py-1 rounded-lg border text-left cursor-pointer transition-colors"
+                  :class="
+                    store.isDark
+                      ? 'bg-obsidian-950/70 border-slate-800 hover:border-sky-500/50 text-slate-300'
+                      : 'bg-white border-slate-200/90 hover:border-sky-400 text-slate-700 shadow-2xs'
+                  "
+                  :title="`点击复制外网连接串 (Pub):\n${item.publicAddress}`"
+                  @click="copyField(item.publicAddress, `${item.title} 外网地址(Pub)`)"
+                >
+                  <span class="px-1 py-0.2 rounded text-[9px] font-sans font-semibold bg-sky-500/15 text-sky-500 shrink-0">
+                    Pub
+                  </span>
+                  <span class="truncate flex-1">{{ item.publicAddress }}</span>
+                  <IconRenderer name="Copy" :size="11" class="text-slate-400 shrink-0" />
+                </button>
 
-                  <!-- Standard URL / IP -->
-                  <div
-                    v-else-if="item.url"
-                    class="flex items-center justify-between gap-1 px-2 py-1 rounded-lg border"
+                <button
+                  v-if="item.privateAddress"
+                  type="button"
+                  class="w-full flex items-center justify-between gap-1.5 px-2 py-1 rounded-lg border text-left cursor-pointer transition-colors"
+                  :class="
+                    store.isDark
+                      ? 'bg-obsidian-950/70 border-slate-800 hover:border-emerald-500/50 text-slate-300'
+                      : 'bg-white border-slate-200/90 hover:border-emerald-400 text-slate-700 shadow-2xs'
+                  "
+                  :title="`点击复制内网连接串 (Private):\n${item.privateAddress}`"
+                  @click="copyField(item.privateAddress, `${item.title} 内网地址(Private)`)"
+                >
+                  <span class="px-1 py-0.2 rounded text-[9px] font-sans font-semibold bg-emerald-500/15 text-emerald-500 shrink-0">
+                    Priv
+                  </span>
+                  <span class="truncate flex-1">{{ item.privateAddress }}</span>
+                  <IconRenderer name="Copy" :size="11" class="text-slate-400 shrink-0" />
+                </button>
+              </template>
+
+              <div
+                v-else-if="item.url"
+                class="w-full flex items-center justify-between gap-1 px-2 py-1 rounded-lg border"
+                :class="
+                  store.isDark
+                    ? 'bg-obsidian-950/70 border-slate-800 text-slate-300'
+                    : 'bg-white border-slate-200/90 text-slate-700 shadow-2xs'
+                "
+              >
+                <span
+                  class="truncate cursor-pointer hover:text-indigo-500 flex-1"
+                  :title="`点击复制地址:\n${item.url}`"
+                  @click="copyField(item.url, `${item.title} 地址`)"
+                >
+                  {{ item.url }}
+                </span>
+                <div class="flex items-center gap-1 shrink-0">
+                  <button
+                    type="button"
+                    class="p-0.5 text-slate-400 hover:text-indigo-500 cursor-pointer"
+                    title="复制地址"
+                    @click="copyField(item.url, `${item.title} 地址`)"
+                  >
+                    <IconRenderer name="Copy" :size="11" />
+                  </button>
+                  <button
+                    v-if="/^https?:\/\//i.test(item.url)"
+                    type="button"
+                    class="p-0.5 text-slate-400 hover:text-indigo-500 cursor-pointer"
+                    title="在浏览器中打开"
+                    @click="openExternalUrl(item.url)"
+                  >
+                    <IconRenderer name="ExternalLink" :size="11" />
+                  </button>
+                </div>
+              </div>
+              <span v-else class="text-slate-400 font-sans text-[11px] px-1">—</span>
+            </div>
+
+            <!-- Col 3: Sub-Accounts Strict 3-Column Grid (Role/Username | Password/Keys | Notes) -->
+            <div
+              class="flex-1 min-w-0 border-r divide-y flex flex-col justify-center"
+              :class="[
+                store.isDark ? 'border-slate-800/80 divide-slate-800/60' : 'border-slate-200/70 divide-slate-200/60'
+              ]"
+            >
+              <div
+                v-for="sub in getEffectiveAccounts(item)"
+                :key="sub.id"
+                class="grid grid-cols-12 items-center min-h-[38px]"
+              >
+                <!-- Sub-Col 3A: Role + Username (col-span-4) -->
+                <div
+                  class="col-span-4 h-full px-2.5 py-1.5 border-r flex items-center gap-1.5 min-w-0"
+                  :class="store.isDark ? 'border-slate-800/60' : 'border-slate-200/60'"
+                >
+                  <span
+                    v-if="sub.role"
+                    class="px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0"
                     :class="
                       store.isDark
-                        ? 'bg-obsidian-950/70 border-slate-800 text-slate-300'
-                        : 'bg-white border-slate-200/90 text-slate-700 shadow-2xs'
+                        ? 'bg-slate-800 text-slate-300 border border-slate-700'
+                        : 'bg-slate-200/70 text-slate-700'
                     "
                   >
-                    <span
-                      class="truncate cursor-pointer hover:text-indigo-500 flex-1"
-                      :title="`点击复制地址: ${item.url}`"
-                      @click="copyField(item.url, `${item.title} 地址`)"
-                    >
-                      {{ item.url }}
-                    </span>
-                    <div class="flex items-center gap-1 shrink-0">
-                      <button
-                        type="button"
-                        class="p-0.5 text-slate-400 hover:text-indigo-500 cursor-pointer"
-                        title="复制地址"
-                        @click="copyField(item.url, `${item.title} 地址`)"
-                      >
-                        <IconRenderer name="Copy" :size="11" />
-                      </button>
-                      <button
-                        v-if="/^https?:\/\//i.test(item.url)"
-                        type="button"
-                        class="p-0.5 text-slate-400 hover:text-indigo-500 cursor-pointer"
-                        title="在浏览器中打开"
-                        @click="openExternalUrl(item.url)"
-                      >
-                        <IconRenderer name="ExternalLink" :size="11" />
-                      </button>
-                    </div>
-                  </div>
-                  <span v-else class="text-slate-400 font-sans text-[11px]">—</span>
-                </div>
-              </td>
+                    {{ sub.role }}
+                  </span>
 
-              <!-- Col 3: Sub-Accounts Matrix Rows (1-to-Many Merged Cell Effect) -->
-              <td
-                class="p-0 border-r"
-                :class="store.isDark ? 'border-slate-800/80' : 'border-slate-200/70'"
-              >
-                <div class="divide-y" :class="store.isDark ? 'divide-slate-800/60' : 'divide-slate-200/60'">
+                  <button
+                    v-if="sub.username"
+                    type="button"
+                    class="flex-1 min-w-0 flex items-center justify-between gap-1 px-1.5 py-0.5 rounded font-mono text-[11px] cursor-pointer transition-colors hover:bg-indigo-500/10"
+                    :class="store.isDark ? 'text-slate-200 hover:text-indigo-300' : 'text-slate-800 hover:text-indigo-600'"
+                    :title="`点击复制账号: ${sub.username}`"
+                    @click="copyField(sub.username, `账号 (${sub.username})`)"
+                  >
+                    <span class="truncate">{{ sub.username }}</span>
+                    <IconRenderer name="Copy" :size="11" class="text-slate-400 shrink-0 opacity-75" />
+                  </button>
+                  <span v-else class="text-slate-400 text-[11px]">—</span>
+                </div>
+
+                <!-- Sub-Col 3B: Password + AK/SK/ACR Chips (col-span-5) -->
+                <div
+                  class="col-span-5 h-full px-2.5 py-1.5 border-r flex items-center gap-1.5 flex-wrap min-w-0"
+                  :class="store.isDark ? 'border-slate-800/60' : 'border-slate-200/60'"
+                >
+                  <!-- Password Pill -->
                   <div
-                    v-for="sub in getEffectiveAccounts(item)"
-                    :key="sub.id"
-                    class="px-3 py-2 flex flex-wrap items-center justify-between gap-2"
+                    v-if="sub.password"
+                    class="inline-flex items-center rounded-md border overflow-hidden max-w-full"
+                    :class="
+                      store.isDark
+                        ? 'bg-obsidian-950 border-indigo-500/30'
+                        : 'bg-white border-indigo-200/90 shadow-2xs'
+                    "
                   >
-                    <!-- Left part of sub-account row: Role + Username + Password + Extended Keys -->
-                    <div class="flex items-center gap-2 flex-wrap min-w-0 flex-1">
-                      <!-- Role Badge -->
-                      <span
-                        v-if="sub.role"
-                        class="px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0"
-                        :class="
-                          store.isDark
-                            ? 'bg-slate-800 text-slate-300 border border-slate-700'
-                            : 'bg-slate-100 text-slate-600 border border-slate-200/80'
-                        "
-                      >
-                        {{ sub.role }}
+                    <button
+                      type="button"
+                      class="px-1.5 py-0.5 text-slate-400 hover:text-indigo-500 cursor-pointer border-r shrink-0"
+                      :class="store.isDark ? 'border-slate-800' : 'border-indigo-100'"
+                      :title="isSubPasswordVisible(sub.id) ? '隐藏密码' : '查看密码明文'"
+                      @click="toggleRevealSub(sub.id)"
+                    >
+                      <IconRenderer :name="isSubPasswordVisible(sub.id) ? 'EyeOff' : 'Eye'" :size="11" />
+                    </button>
+                    <button
+                      type="button"
+                      class="px-2 py-0.5 font-mono text-[11px] flex items-center gap-1.5 cursor-pointer transition-colors min-w-0"
+                      :class="
+                        store.isDark
+                          ? 'text-indigo-300 hover:bg-indigo-500/20'
+                          : 'text-indigo-700 hover:bg-indigo-50'
+                      "
+                      :title="`点击直接复制密码 (${sub.username || item.title})`"
+                      @click="copyField(sub.password, `${sub.username || item.title} 的密码`)"
+                    >
+                      <span class="truncate max-w-[95px]">
+                        {{ isSubPasswordVisible(sub.id) ? sub.password : '••••••••' }}
                       </span>
-
-                      <!-- Username Copy Pill -->
-                      <button
-                        v-if="sub.username"
-                        type="button"
-                        class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md font-mono text-xs border cursor-pointer transition-colors max-w-[210px]"
-                        :class="
-                          store.isDark
-                            ? 'bg-obsidian-950 border-slate-700/80 text-slate-200 hover:border-indigo-500/60'
-                            : 'bg-white border-slate-200/90 text-slate-800 hover:border-indigo-400 shadow-2xs'
-                        "
-                        :title="`点击复制账号: ${sub.username}`"
-                        @click="copyField(sub.username, `账号 (${sub.username})`)"
-                      >
-                        <span class="truncate">{{ sub.username }}</span>
-                        <IconRenderer name="Copy" :size="11" class="text-slate-400 shrink-0" />
-                      </button>
-
-                      <!-- Password Mask & Direct Copy Pill -->
-                      <div
-                        v-if="sub.password"
-                        class="inline-flex items-center rounded-md border overflow-hidden"
-                        :class="
-                          store.isDark
-                            ? 'bg-obsidian-950 border-indigo-500/30'
-                            : 'bg-indigo-50/50 border-indigo-200/90'
-                        "
-                      >
-                        <button
-                          type="button"
-                          class="px-1.5 py-0.5 text-slate-400 hover:text-indigo-500 cursor-pointer border-r"
-                          :class="store.isDark ? 'border-slate-800' : 'border-indigo-100'"
-                          :title="isSubPasswordVisible(sub.id) ? '隐藏密码' : '查看密码明文'"
-                          @click="toggleRevealSub(sub.id)"
-                        >
-                          <IconRenderer :name="isSubPasswordVisible(sub.id) ? 'EyeOff' : 'Eye'" :size="11" />
-                        </button>
-                        <button
-                          type="button"
-                          class="px-2 py-0.5 font-mono text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
-                          :class="
-                            store.isDark
-                              ? 'text-indigo-300 hover:bg-indigo-500/20'
-                              : 'text-indigo-700 hover:bg-indigo-100/70'
-                          "
-                          title="点击直接复制密码原文 (自动去除首尾空格)"
-                          @click="copyField(sub.password, `${sub.username || item.title} 的密码`)"
-                        >
-                          <span class="max-w-[160px] truncate">
-                            {{ isSubPasswordVisible(sub.id) ? sub.password : '••••••••••' }}
-                          </span>
-                          <span class="text-[10px] font-sans font-semibold underline decoration-indigo-400/50">
-                            复制密码
-                          </span>
-                        </button>
-                      </div>
-
-                      <!-- Cloud AccessKey ID (AK) Pill -->
-                      <button
-                        v-if="sub.accessKeyId"
-                        type="button"
-                        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-mono text-[11px] border cursor-pointer transition-colors"
-                        :class="
-                          store.isDark
-                            ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 hover:bg-amber-500/20'
-                            : 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
-                        "
-                        :title="`点击复制 AccessKey ID: ${sub.accessKeyId}`"
-                        @click="copyField(sub.accessKeyId, 'AccessKey ID (AK)')"
-                      >
-                        <span class="font-sans font-semibold text-[10px]">AK:</span>
-                        <span class="max-w-[110px] truncate">{{ sub.accessKeyId }}</span>
-                        <IconRenderer name="Copy" :size="10" />
-                      </button>
-
-                      <!-- Cloud AccessKey Secret (SK) Pill -->
-                      <button
-                        v-if="sub.accessKeySecret"
-                        type="button"
-                        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-mono text-[11px] border cursor-pointer transition-colors"
-                        :class="
-                          store.isDark
-                            ? 'bg-amber-500/15 border-amber-500/40 text-amber-200 hover:bg-amber-500/25'
-                            : 'bg-amber-100/80 border-amber-300 text-amber-900 hover:bg-amber-200/70'
-                        "
-                        :title="`点击复制 AccessKey Secret (SK)`"
-                        @click="copyField(sub.accessKeySecret, 'AccessKey Secret (SK)')"
-                      >
-                        <span class="font-sans font-semibold text-[10px]">复制 SK</span>
-                        <IconRenderer name="Copy" :size="10" />
-                      </button>
-
-                      <!-- Extra Secret (ACR Password / Root Password) -->
-                      <button
-                        v-if="sub.extraSecret"
-                        type="button"
-                        class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md font-mono text-[11px] border cursor-pointer transition-colors"
-                        :class="
-                          store.isDark
-                            ? 'bg-purple-500/15 border-purple-500/35 text-purple-300 hover:bg-purple-500/25'
-                            : 'bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100'
-                        "
-                        :title="`点击复制附加密钥: ${sub.extraSecret}`"
-                        @click="copyField(sub.extraSecret, '附加密钥/ACR密码')"
-                      >
-                        <span class="max-w-[130px] truncate">
-                          {{ isSubPasswordVisible(sub.id) ? sub.extraSecret : '附加密钥/ACR' }}
-                        </span>
-                        <IconRenderer name="Copy" :size="10" />
-                      </button>
-                    </div>
-
-                    <!-- Right part of sub-account row: Note + Sub-account delete -->
-                    <div class="flex items-center gap-2 shrink-0">
-                      <span
-                        v-if="sub.notes"
-                        class="text-[11px] text-slate-400 max-w-[170px] truncate"
-                        :title="sub.notes"
-                      >
-                        {{ sub.notes }}
-                      </span>
-                      <button
-                        v-if="getEffectiveAccounts(item).length > 1"
-                        type="button"
-                        class="opacity-0 group-hover:opacity-100 p-1 rounded text-slate-400 hover:text-rose-500 cursor-pointer transition-opacity"
-                        title="仅移除此子账号"
-                        @click="requestDeleteSubAccount(item, sub)"
-                      >
-                        <IconRenderer name="X" :size="12" />
-                      </button>
-                    </div>
+                      <span class="text-[10px] font-sans font-semibold text-indigo-500 shrink-0">复制</span>
+                    </button>
                   </div>
-                </div>
-              </td>
 
-              <!-- Col 4: Instance Level Actions (+SubAccount, Duplicate Env, Edit, Delete) -->
-              <td class="py-2 px-2 text-right whitespace-nowrap">
-                <div class="inline-flex items-center gap-0.5">
+                  <!-- Cloud AK Pill -->
                   <button
+                    v-if="sub.accessKeyId"
                     type="button"
-                    class="p-1.5 rounded-lg text-slate-400 hover:text-indigo-500 hover:bg-indigo-500/10 cursor-pointer"
-                    title="在此实例/平台下追加新角色子账号"
-                    @click="openEditModal(item, true)"
+                    class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] border cursor-pointer shrink-0"
+                    :class="
+                      store.isDark
+                        ? 'bg-amber-500/15 border-amber-500/35 text-amber-300 hover:bg-amber-500/25'
+                        : 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
+                    "
+                    :title="`点击复制 AccessKey ID: ${sub.accessKeyId}`"
+                    @click="copyField(sub.accessKeyId, 'AccessKey ID (AK)')"
                   >
-                    <IconRenderer name="Plus" :size="13" />
+                    <span class="font-sans font-semibold">AK</span>
+                    <IconRenderer name="Copy" :size="9" />
                   </button>
+
+                  <!-- Cloud SK Pill -->
                   <button
+                    v-if="sub.accessKeySecret"
                     type="button"
-                    class="p-1.5 rounded-lg text-slate-400 hover:text-indigo-500 hover:bg-indigo-500/10 cursor-pointer"
-                    title="克隆为新环境条目 (如 dev -> test -> prod)"
-                    @click="duplicateEntryForNewEnv(item)"
+                    class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] border cursor-pointer shrink-0"
+                    :class="
+                      store.isDark
+                        ? 'bg-amber-500/20 border-amber-500/40 text-amber-200 hover:bg-amber-500/30'
+                        : 'bg-amber-100/80 border-amber-300 text-amber-900 hover:bg-amber-200/80'
+                    "
+                    title="点击复制 AccessKey Secret (SK)"
+                    @click="copyField(sub.accessKeySecret, 'AccessKey Secret (SK)')"
                   >
-                    <IconRenderer name="CopyPlus" :size="13" />
+                    <span class="font-sans font-semibold">SK</span>
+                    <IconRenderer name="Copy" :size="9" />
                   </button>
+
+                  <!-- Extra Secret (ACR / Root) -->
                   <button
+                    v-if="sub.extraSecret"
                     type="button"
-                    class="p-1.5 rounded-lg text-slate-400 hover:text-indigo-500 hover:bg-indigo-500/10 cursor-pointer"
-                    title="编辑此资源条目"
-                    @click="openEditModal(item, false)"
+                    class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] border cursor-pointer shrink-0"
+                    :class="
+                      store.isDark
+                        ? 'bg-purple-500/15 border-purple-500/35 text-purple-300 hover:bg-purple-500/25'
+                        : 'bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100'
+                    "
+                    :title="`点击复制附加密钥: ${sub.extraSecret}`"
+                    @click="copyField(sub.extraSecret, '附加密钥/ACR密码')"
                   >
-                    <IconRenderer name="Pencil" :size="13" />
-                  </button>
-                  <button
-                    type="button"
-                    class="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 cursor-pointer"
-                    title="删除此资源条目"
-                    @click="requestDeleteEntry(item)"
-                  >
-                    <IconRenderer name="Trash2" :size="13" />
+                    <span class="font-sans font-semibold">附加</span>
+                    <IconRenderer name="Copy" :size="9" />
                   </button>
                 </div>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+
+                <!-- Sub-Col 3C: Dedicated Note Cell (col-span-3, never overlaps username) -->
+                <div class="col-span-3 h-full px-2.5 py-1.5 flex items-center justify-between gap-1 min-w-0">
+                  <span
+                    class="text-[11px] text-slate-400 truncate"
+                    :title="sub.notes || item.notes"
+                  >
+                    {{ sub.notes || (getEffectiveAccounts(item).length === 1 ? item.notes : '') || '—' }}
+                  </span>
+                  <button
+                    v-if="getEffectiveAccounts(item).length > 1"
+                    type="button"
+                    class="opacity-0 group-hover:opacity-100 p-0.5 rounded text-slate-400 hover:text-rose-500 cursor-pointer shrink-0 transition-opacity"
+                    title="仅移除此子账号"
+                    @click="requestDeleteSubAccount(item, sub)"
+                  >
+                    <IconRenderer name="X" :size="12" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Col 4: Instance Level Actions (88px fixed, always visible) -->
+            <div class="w-[88px] shrink-0 py-2 px-1.5 flex items-center justify-end gap-0.5">
+              <button
+                type="button"
+                class="p-1 rounded-lg text-slate-400 hover:text-indigo-500 hover:bg-indigo-500/10 cursor-pointer"
+                title="在此实例/平台下追加新角色子账号"
+                @click="openEditModal(item, true)"
+              >
+                <IconRenderer name="Plus" :size="13" />
+              </button>
+              <button
+                type="button"
+                class="p-1 rounded-lg text-slate-400 hover:text-indigo-500 hover:bg-indigo-500/10 cursor-pointer"
+                title="克隆为新环境条目 (如 dev -> test -> prod)"
+                @click="duplicateEntryForNewEnv(item)"
+              >
+                <IconRenderer name="CopyPlus" :size="13" />
+              </button>
+              <button
+                type="button"
+                class="p-1 rounded-lg text-slate-400 hover:text-indigo-500 hover:bg-indigo-500/10 cursor-pointer"
+                title="编辑此资源条目"
+                @click="openEditModal(item, false)"
+              >
+                <IconRenderer name="Pencil" :size="13" />
+              </button>
+              <button
+                type="button"
+                class="p-1 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 cursor-pointer"
+                title="删除此资源条目"
+                @click="requestDeleteEntry(item)"
+              >
+                <IconRenderer name="Trash2" :size="13" />
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- MODE B: Split Master-Detail Inspector View -->
