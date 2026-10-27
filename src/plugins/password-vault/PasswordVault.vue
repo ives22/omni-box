@@ -1152,9 +1152,9 @@ onMounted(() => {
                 环境 / 平台与组件
               </th>
 
-              <!-- Col 2: Auto-Fit Connection Address -->
+              <!-- Col 2: Auto-Wrap Connection Address with Controlled Width -->
               <th
-                class="py-2 px-3 border-b border-r whitespace-nowrap"
+                class="w-[225px] min-w-[210px] max-w-[235px] py-2 px-3 border-b border-r whitespace-nowrap"
                 :class="store.isDark ? 'bg-[#111726] border-slate-800' : 'bg-[#F1F5F9] border-slate-200/90'"
               >
                 连接地址 (点击复制)
@@ -1278,11 +1278,11 @@ onMounted(() => {
                   </div>
                 </td>
 
-                <!-- Middle Col 2: Endpoints / Dual Addresses (Merged via rowspan, Auto-Fit Full Text without truncation) -->
+                <!-- Middle Col 2: Endpoints / Dual Addresses (Merged via rowspan, Controlled Width + Auto Word-Wrap) -->
                 <td
                   v-if="subIdx === 0"
                   :rowspan="getEffectiveAccounts(item).length"
-                  class="py-2 px-3 border-b border-r font-mono text-[11px] whitespace-nowrap align-middle"
+                  class="w-[225px] min-w-[210px] max-w-[235px] py-2 px-2.5 border-b border-r font-mono text-[11px] align-middle"
                   :class="store.isDark ? 'border-slate-800/80' : 'border-slate-200/80'"
                 >
                   <div class="space-y-1.5">
@@ -1290,7 +1290,7 @@ onMounted(() => {
                       <button
                         v-if="item.publicAddress"
                         type="button"
-                        class="w-full flex items-center justify-between gap-2 px-2.5 py-1 rounded-lg border text-left cursor-pointer transition-colors whitespace-nowrap"
+                        class="w-full flex items-start justify-between gap-1.5 px-2 py-1.5 rounded-lg border text-left cursor-pointer transition-colors"
                         :class="
                           store.isDark
                             ? 'bg-obsidian-950/70 border-slate-800 hover:border-sky-500/50 text-slate-300'
@@ -1299,17 +1299,19 @@ onMounted(() => {
                         title="点击复制外网连接串 (Pub)"
                         @click="copyField(item.publicAddress, `${item.title} 外网地址(Pub)`)"
                       >
-                        <span class="px-1 py-0.2 rounded text-[9px] font-sans font-semibold bg-sky-500/15 text-sky-500 shrink-0">
+                        <span class="px-1 py-0.5 rounded text-[9px] font-sans font-semibold bg-sky-500/15 text-sky-500 shrink-0 mt-0.5 leading-none">
                           Pub
                         </span>
-                        <span>{{ item.publicAddress }}</span>
-                        <IconRenderer name="Copy" :size="11" class="text-slate-400 shrink-0 ml-1" />
+                        <span class="flex-1 min-w-0 break-all whitespace-normal leading-snug">
+                          {{ item.publicAddress }}
+                        </span>
+                        <IconRenderer name="Copy" :size="11" class="text-slate-400 shrink-0 mt-0.5" />
                       </button>
 
                       <button
                         v-if="item.privateAddress"
                         type="button"
-                        class="w-full flex items-center justify-between gap-2 px-2.5 py-1 rounded-lg border text-left cursor-pointer transition-colors whitespace-nowrap"
+                        class="w-full flex items-start justify-between gap-1.5 px-2 py-1.5 rounded-lg border text-left cursor-pointer transition-colors"
                         :class="
                           store.isDark
                             ? 'bg-obsidian-950/70 border-slate-800 hover:border-emerald-500/50 text-slate-300'
@@ -1318,17 +1320,19 @@ onMounted(() => {
                         title="点击复制内网连接串 (Private)"
                         @click="copyField(item.privateAddress, `${item.title} 内网地址(Private)`)"
                       >
-                        <span class="px-1 py-0.2 rounded text-[9px] font-sans font-semibold bg-emerald-500/15 text-emerald-500 shrink-0">
+                        <span class="px-1 py-0.5 rounded text-[9px] font-sans font-semibold bg-emerald-500/15 text-emerald-500 shrink-0 mt-0.5 leading-none">
                           Priv
                         </span>
-                        <span>{{ item.privateAddress }}</span>
-                        <IconRenderer name="Copy" :size="11" class="text-slate-400 shrink-0 ml-1" />
+                        <span class="flex-1 min-w-0 break-all whitespace-normal leading-snug">
+                          {{ item.privateAddress }}
+                        </span>
+                        <IconRenderer name="Copy" :size="11" class="text-slate-400 shrink-0 mt-0.5" />
                       </button>
                     </template>
 
                     <div
                       v-else-if="item.url"
-                      class="inline-flex items-center justify-between gap-2 px-2.5 py-1 rounded-lg border whitespace-nowrap"
+                      class="w-full flex items-start justify-between gap-1.5 px-2 py-1.5 rounded-lg border"
                       :class="
                         store.isDark
                           ? 'bg-obsidian-950/70 border-slate-800 text-slate-300'
@@ -1336,13 +1340,13 @@ onMounted(() => {
                       "
                     >
                       <span
-                        class="cursor-pointer hover:text-indigo-500"
+                        class="flex-1 min-w-0 break-all whitespace-normal leading-snug cursor-pointer hover:text-indigo-500"
                         title="点击复制地址"
                         @click="copyField(item.url, `${item.title} 地址`)"
                       >
                         {{ item.url }}
                       </span>
-                      <div class="flex items-center gap-1 shrink-0">
+                      <div class="flex items-center gap-1 shrink-0 mt-0.5">
                         <button
                           type="button"
                           class="p-0.5 text-slate-400 hover:text-indigo-500 cursor-pointer"
@@ -1399,12 +1403,13 @@ onMounted(() => {
                   </div>
                 </td>
 
-                <!-- Middle Col 4: Password + Extended Keys (AK/SK/ACR, Single-Line Auto-Fit) -->
+                <!-- Middle Col 4: Password + Multi-Line Stacked Extended Keys (AK/SK/ACR) -->
                 <td
                   class="px-3 py-2 border-b border-r whitespace-nowrap"
                   :class="store.isDark ? 'border-slate-800/80' : 'border-slate-200/80'"
                 >
-                  <div class="flex items-center gap-1.5 whitespace-nowrap">
+                  <div class="flex flex-col items-start gap-1.5">
+                    <!-- Line 1: Primary Password Pill -->
                     <div
                       v-if="sub.password"
                       class="inline-flex items-center rounded-md border overflow-hidden shrink-0"
@@ -1441,39 +1446,46 @@ onMounted(() => {
                       </button>
                     </div>
 
-                    <button
-                      v-if="sub.accessKeyId"
-                      type="button"
-                      class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] border cursor-pointer shrink-0"
-                      :class="
-                        store.isDark
-                          ? 'bg-amber-500/15 border-amber-500/35 text-amber-300 hover:bg-amber-500/25'
-                          : 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
-                      "
-                      :title="`点击复制 AccessKey ID: ${sub.accessKeyId}`"
-                      @click="copyField(sub.accessKeyId, 'AccessKey ID (AK)')"
+                    <!-- Line 2: Cloud AK / SK Row -->
+                    <div
+                      v-if="sub.accessKeyId || sub.accessKeySecret"
+                      class="flex items-center gap-1.5 flex-wrap"
                     >
-                      <span class="font-sans font-semibold">AK:</span>
-                      <span>{{ sub.accessKeyId }}</span>
-                      <IconRenderer name="Copy" :size="9" />
-                    </button>
+                      <button
+                        v-if="sub.accessKeyId"
+                        type="button"
+                        class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] border cursor-pointer shrink-0"
+                        :class="
+                          store.isDark
+                            ? 'bg-amber-500/15 border-amber-500/35 text-amber-300 hover:bg-amber-500/25'
+                            : 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
+                        "
+                        :title="`点击复制 AccessKey ID: ${sub.accessKeyId}`"
+                        @click="copyField(sub.accessKeyId, 'AccessKey ID (AK)')"
+                      >
+                        <span class="font-sans font-semibold">AK:</span>
+                        <span>{{ sub.accessKeyId }}</span>
+                        <IconRenderer name="Copy" :size="9" />
+                      </button>
 
-                    <button
-                      v-if="sub.accessKeySecret"
-                      type="button"
-                      class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] border cursor-pointer shrink-0"
-                      :class="
-                        store.isDark
-                          ? 'bg-amber-500/20 border-amber-500/40 text-amber-200 hover:bg-amber-500/30'
-                          : 'bg-amber-100/80 border-amber-300 text-amber-900 hover:bg-amber-200/80'
-                      "
-                      title="点击复制 AccessKey Secret (SK)"
-                      @click="copyField(sub.accessKeySecret, 'AccessKey Secret (SK)')"
-                    >
-                      <span class="font-sans font-semibold">复制 SK</span>
-                      <IconRenderer name="Copy" :size="9" />
-                    </button>
+                      <button
+                        v-if="sub.accessKeySecret"
+                        type="button"
+                        class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] border cursor-pointer shrink-0"
+                        :class="
+                          store.isDark
+                            ? 'bg-amber-500/20 border-amber-500/40 text-amber-200 hover:bg-amber-500/30'
+                            : 'bg-amber-100/80 border-amber-300 text-amber-900 hover:bg-amber-200/80'
+                        "
+                        title="点击复制 AccessKey Secret (SK)"
+                        @click="copyField(sub.accessKeySecret, 'AccessKey Secret (SK)')"
+                      >
+                        <span class="font-sans font-semibold">复制 SK</span>
+                        <IconRenderer name="Copy" :size="9" />
+                      </button>
+                    </div>
 
+                    <!-- Line 3: Extra Secret (ACR / Root) Row -->
                     <button
                       v-if="sub.extraSecret"
                       type="button"
