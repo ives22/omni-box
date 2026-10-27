@@ -93,26 +93,10 @@ export const useLauncherStore = defineStore('launcher', () => {
   const standaloneParam = urlParams?.get('standalone') || null
   const standaloneExtParam = urlParams?.get('ext') || null
 
-  const savedActivePlugin =
-    typeof sessionStorage !== 'undefined'
-      ? sessionStorage.getItem('omnibox:active-plugin-id') || null
-      : null
-
   const searchQuery = ref('')
   const subInputQuery = ref('')
   const subInputPlaceholder = ref('在插件内检索或过滤...')
-  const activePluginId = ref<string | null>(standaloneParam || savedActivePlugin)
-  watch(activePluginId, (val) => {
-    try {
-      if (val) {
-        sessionStorage.setItem('omnibox:active-plugin-id', val)
-      } else {
-        sessionStorage.removeItem('omnibox:active-plugin-id')
-      }
-    } catch {
-      // ignore
-    }
-  })
+  const activePluginId = ref<string | null>(standaloneParam)
   const isStandaloneWindow = ref(Boolean(standaloneParam))
   const isWindowMaximized = ref(false)
   const isDetachedWindow = ref(Boolean(standaloneParam))

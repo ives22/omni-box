@@ -33,18 +33,6 @@ const savedTab =
     ? (sessionStorage.getItem('omnibox:user-center-tab') as TabKey | null)
     : null
 const activeTab = ref<TabKey>(initialTabFromPlugin || savedTab || 'preferences')
-watch(
-  activeTab,
-  (val) => {
-    try {
-      sessionStorage.setItem('omnibox:user-center-tab', val)
-    } catch {
-      // ignore
-    }
-    vaultSessionUnlocked.value = Boolean((window as any).__omniboxVaultSession)
-  },
-  { immediate: true }
-)
 const isRescanning = ref(false)
 
 // Grouped Navigation Sidebar (uTools Reference Style: Short 4-char labels + Grouped sections)
@@ -82,6 +70,15 @@ const newMasterPwd = ref('')
 const showOldMasterPwd = ref(false)
 const showNewMasterPwd = ref(false)
 const vaultSessionUnlocked = ref(Boolean((window as any).__omniboxVaultSession))
+
+watch(activeTab, (val) => {
+  try {
+    sessionStorage.setItem('omnibox:user-center-tab', val)
+  } catch {
+    // ignore
+  }
+  vaultSessionUnlocked.value = Boolean((window as any).__omniboxVaultSession)
+})
 
 // Ensure default values are populated even for legacy persisted userSettings
 const vaultAutoLockModel = computed({
