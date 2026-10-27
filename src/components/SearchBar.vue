@@ -276,7 +276,7 @@ defineExpose({
 <template>
   <header
     data-tauri-drag-region
-    class="relative flex items-center h-[52px] px-4 border-b select-none transition-colors duration-150 shrink-0 z-30"
+    class="relative flex items-center h-[52px] px-4 border-b select-none transition-colors duration-150 shrink-0 z-50"
     :class="
       store.isDark
         ? 'bg-[#0E131F] border-slate-800 text-slate-100'

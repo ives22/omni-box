@@ -1128,7 +1128,7 @@ onMounted(() => {
       <!-- MODE A: True Excel Merged-Cell (rowspan) Table with Sticky First/Last Columns & Auto-Width Horizontal Scroll -->
       <div
         v-if="viewMode === 'table'"
-        class="flex-1 w-full overflow-x-auto overflow-y-auto min-h-0 vault-table-scroll"
+        class="relative z-0 flex-1 w-full overflow-x-auto overflow-y-auto min-h-0 vault-table-scroll"
       >
         <table class="w-max min-w-full border-separate border-spacing-0 text-left text-xs">
           <thead
