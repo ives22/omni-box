@@ -94,12 +94,22 @@ const collapseUnchanged = ref(true)
 const ignoreWhitespace = ref(false)
 const onlyShowChanges = ref(false)
 
-const activeHunkIndex = ref<number | null>(1)
+const activeHunkIndex = ref<number | null>(null)
 const expandedSameBlockIds = ref<Set<string>>(new Set())
 const undoStack = ref<UndoSnapshot[]>([])
 const diffScrollContainerRef = ref<HTMLElement | null>(null)
 
 onMounted(() => {
+  const winObj = window as unknown as {
+    __omniboxPluginInterceptEscape?: () => boolean
+  }
+  winObj.__omniboxPluginInterceptEscape = () => {
+    if (activeHunkIndex.value !== null) {
+      activeHunkIndex.value = null
+      return true
+    }
+    return false
+  }
   try {
     const rawDraft = localStorage.getItem(DRAFT_STORAGE_KEY)
     if (rawDraft) {
@@ -135,6 +145,12 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  const winObj = window as unknown as {
+    __omniboxPluginInterceptEscape?: () => boolean
+  }
+  if (winObj.__omniboxPluginInterceptEscape) {
+    delete winObj.__omniboxPluginInterceptEscape
+  }
   window.removeEventListener('keydown', handlePluginKeydown, true)
 })
 
@@ -455,12 +471,12 @@ const allHunks = computed<ChangeHunk[]>(() =>
 
 const totalHunks = computed(() => allHunks.value.length)
 
-// Keep activeHunkIndex valid when hunks change
+// Keep activeHunkIndex valid when hunks change, without auto-opening when null
 watch(totalHunks, (newTotal) => {
   if (newTotal === 0) {
     activeHunkIndex.value = null
-  } else if (activeHunkIndex.value === null || activeHunkIndex.value > newTotal) {
-    activeHunkIndex.value = Math.min(activeHunkIndex.value || 1, newTotal)
+  } else if (activeHunkIndex.value !== null && activeHunkIndex.value > newTotal) {
+    activeHunkIndex.value = newTotal
   }
 })
 
@@ -559,6 +575,7 @@ function mergeHunkToRight(hunk: ChangeHunk) {
   const nextRight = rightLinesArray.value.slice()
   nextRight.splice(hunk.rightStartIdx, hunk.rightCount, ...hunk.leftRawLines)
   rightText.value = nextRight.join('\n')
+  activeHunkIndex.value = null
   store.showToast(`已将更改 #${hunk.hunkIndex} 合并至右侧`)
 }
 
@@ -574,6 +591,7 @@ function mergeHunkToLeft(hunk: ChangeHunk) {
   const nextLeft = leftLinesArray.value.slice()
   nextLeft.splice(hunk.leftStartIdx, hunk.leftCount, ...hunk.rightRawLines)
   leftText.value = nextLeft.join('\n')
+  activeHunkIndex.value = null
   store.showToast(`已将更改 #${hunk.hunkIndex} 合并至左侧`)
 }
 
@@ -711,7 +729,9 @@ function handlePluginKeydown(e: KeyboardEvent) {
               : 'bg-white border-slate-200/90 text-slate-700'
           "
         >
-          <span>更改 {{ activeHunkIndex ?? 1 }}/{{ totalHunks }}</span>
+          <span>
+            {{ activeHunkIndex ? `更改 ${activeHunkIndex}/${totalHunks}` : `共 ${totalHunks} 处差异` }}
+          </span>
           <button
             type="button"
             title="上一个差异块 (Option+↑)"
@@ -994,19 +1014,21 @@ function handlePluginKeydown(e: KeyboardEvent) {
         <div
           v-else
           :data-hunk-index="block.hunkIndex"
-          class="my-1.5 rounded-xl border transition-all cursor-pointer overflow-hidden"
+          class="transition-all cursor-pointer overflow-hidden"
           :class="
             activeHunkIndex === block.hunkIndex
               ? store.isDark
-                ? 'border-indigo-500/80 ring-2 ring-indigo-500/25 bg-slate-900/40 shadow-lg'
-                : 'border-indigo-400 ring-2 ring-indigo-500/20 bg-white shadow-md'
+                ? 'my-1.5 rounded-xl border border-indigo-500/80 ring-2 ring-indigo-500/25 bg-slate-900/40 shadow-lg'
+                : 'my-1.5 rounded-xl border border-indigo-400 ring-2 ring-indigo-500/20 bg-white shadow-md'
               : store.isDark
-                ? 'border-slate-800/90 hover:border-indigo-500/40'
-                : 'border-slate-200/90 hover:border-indigo-300'
+                ? 'border-b border-slate-800/40 hover:ring-1 hover:ring-indigo-500/40'
+                : 'border-b border-slate-100 hover:ring-1 hover:ring-indigo-300'
           "
-          @click="activeHunkIndex = block.hunkIndex"
+          @click="
+            activeHunkIndex = activeHunkIndex === block.hunkIndex ? null : block.hunkIndex
+          "
         >
-          <!-- Active Hunk Top Control Bar (Shown when this hunk is selected) -->
+          <!-- Active Hunk Top Control Bar (Shown ONLY when this hunk is clicked/selected) -->
           <div
             v-if="activeHunkIndex === block.hunkIndex"
             class="flex items-center justify-between px-3 py-1.5 border-b font-sans text-xs"
@@ -1015,6 +1037,7 @@ function handlePluginKeydown(e: KeyboardEvent) {
                 ? 'bg-[#141D32] border-slate-800 text-slate-200'
                 : 'bg-slate-50 border-slate-200/80 text-slate-700'
             "
+            @click.stop
           >
             <div class="flex items-center gap-2">
               <span class="font-semibold">
@@ -1051,6 +1074,14 @@ function handlePluginKeydown(e: KeyboardEvent) {
 
             <div class="flex items-center gap-2 text-[11px] text-slate-400">
               <span>点击下方按钮可将该处差异向右或向左合并</span>
+              <button
+                type="button"
+                title="收起合并栏 (Esc)"
+                class="p-0.5 rounded hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                @click.stop="activeHunkIndex = null"
+              >
+                <IconRenderer name="X" :size="13" />
+              </button>
             </div>
           </div>
 
