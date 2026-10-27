@@ -1203,7 +1203,7 @@ async fn spawn_detached_plugin_window(
     let _ = app_handle.run_on_main_thread(move || {
         if let Some(main_win) = handle_for_main.get_webview_window("main") {
             let _ = main_win
-                .eval("window.__omniboxOnWindowHidden && window.__omniboxOnWindowHidden()");
+                .eval("window.__omniboxResetState && window.__omniboxResetState()");
             #[cfg(target_os = "macos")]
             if let Ok(ns_main) = main_win.ns_window() {
                 hide_nswindow_native(ns_main);

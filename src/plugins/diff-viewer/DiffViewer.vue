@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useLauncherStore } from '@/stores/launcher'
 import IconRenderer from '@/components/IconRenderer.vue'
 
@@ -11,9 +11,9 @@ interface DiffRow {
   rightText: string
 }
 
-const store = useLauncherStore()
+const DRAFT_STORAGE_KEY = 'omnibox:live-draft:diff-viewer'
 
-const leftText = ref(`{
+const DEFAULT_LEFT_TEXT = `{
   "service": "payment-gateway",
   "replicas": 3,
   "timeoutMs": 3000,
@@ -22,9 +22,9 @@ const leftText = ref(`{
     "circuitBreaker": false
   },
   "region": "ap-east-1"
-}`)
+}`
 
-const rightText = ref(`{
+const DEFAULT_RIGHT_TEXT = `{
   "service": "payment-gateway-v2",
   "replicas": 6,
   "timeoutMs": 1500,
@@ -34,11 +34,60 @@ const rightText = ref(`{
     "rateLimit": 5000
   },
   "region": "ap-east-1"
-}`)
+}`
 
+const store = useLauncherStore()
+
+const leftText = ref(DEFAULT_LEFT_TEXT)
+const rightText = ref(DEFAULT_RIGHT_TEXT)
 const viewMode = ref<'split' | 'edit'>('split')
 const ignoreWhitespace = ref(false)
 const onlyShowChanges = ref(false)
+
+onMounted(() => {
+  try {
+    const rawDraft = localStorage.getItem(DRAFT_STORAGE_KEY)
+    if (rawDraft) {
+      const parsed = JSON.parse(rawDraft) as {
+        leftText?: string
+        rightText?: string
+        viewMode?: 'split' | 'edit'
+        ignoreWhitespace?: boolean
+        onlyShowChanges?: boolean
+      }
+      if (typeof parsed.leftText === 'string') leftText.value = parsed.leftText
+      if (typeof parsed.rightText === 'string') rightText.value = parsed.rightText
+      if (parsed.viewMode === 'split' || parsed.viewMode === 'edit') {
+        viewMode.value = parsed.viewMode
+      }
+      if (typeof parsed.ignoreWhitespace === 'boolean') {
+        ignoreWhitespace.value = parsed.ignoreWhitespace
+      }
+      if (typeof parsed.onlyShowChanges === 'boolean') {
+        onlyShowChanges.value = parsed.onlyShowChanges
+      }
+    }
+  } catch {
+    // ignore corrupted draft
+  }
+})
+
+watch([leftText, rightText, viewMode, ignoreWhitespace, onlyShowChanges], () => {
+  try {
+    localStorage.setItem(
+      DRAFT_STORAGE_KEY,
+      JSON.stringify({
+        leftText: leftText.value,
+        rightText: rightText.value,
+        viewMode: viewMode.value,
+        ignoreWhitespace: ignoreWhitespace.value,
+        onlyShowChanges: onlyShowChanges.value
+      })
+    )
+  } catch {
+    // ignore storage quota errors
+  }
+})
 
 function normalize(line: string): string {
   return ignoreWhitespace.value ? line.trim().replace(/\s+/g, ' ') : line
@@ -147,6 +196,32 @@ function swapSides() {
   rightText.value = tmp
   store.showToast('已交换左右两侧对比文本')
 }
+
+function clearBothSides() {
+  leftText.value = ''
+  rightText.value = ''
+  viewMode.value = 'edit'
+  store.showToast('已清空左右对比文本，可直接输入或粘贴新内容')
+}
+
+async function pasteToSide(side: 'left' | 'right') {
+  try {
+    const text = await navigator.clipboard.readText()
+    if (!text) {
+      store.showToast('剪贴板为空', 'info')
+      return
+    }
+    if (side === 'left') {
+      leftText.value = text
+      store.showToast('已将剪贴板内容粘贴至左侧（文本 1）')
+    } else {
+      rightText.value = text
+      store.showToast('已将剪贴板内容粘贴至右侧（文本 2）')
+    }
+  } catch {
+    store.showToast('无法读取剪贴板，请在输入框内按 ⌘V 粘贴', 'warning')
+  }
+}
 </script>
 
 <template>
@@ -202,6 +277,16 @@ function swapSides() {
         >
           <IconRenderer name="ArrowLeftRight" :size="13" />
           <span>交换左右</span>
+        </button>
+
+        <button
+          type="button"
+          class="btn-secondary !px-2.5 !py-1 !rounded-lg hover:!text-rose-500"
+          title="清空左右两侧文本并进入编辑模式"
+          @click="clearBothSides"
+        >
+          <IconRenderer name="Trash2" :size="13" />
+          <span>清空</span>
         </button>
 
         <label class="flex items-center gap-1.5 ml-2 cursor-pointer text-slate-500 dark:text-slate-400">
@@ -311,24 +396,62 @@ function swapSides() {
       :class="store.isDark ? 'divide-slate-800' : 'divide-slate-200'"
     >
       <div class="flex flex-col min-h-0">
-        <div class="px-3 py-1.5 text-[11px] font-mono text-slate-400 border-b border-inherit">
-          原始文本 (Original)
+        <div class="flex items-center justify-between px-3 py-1.5 text-[11px] font-mono text-slate-400 border-b border-inherit">
+          <span>原始文本 1 (Original)</span>
+          <div class="flex items-center gap-2 font-sans">
+            <button
+              type="button"
+              class="text-indigo-500 hover:underline cursor-pointer flex items-center gap-1"
+              @click="pasteToSide('left')"
+            >
+              <IconRenderer name="ClipboardPaste" :size="11" />
+              <span>粘贴</span>
+            </button>
+            <button
+              v-if="leftText"
+              type="button"
+              class="text-slate-400 hover:text-rose-500 cursor-pointer"
+              @click="leftText = ''"
+            >
+              清空
+            </button>
+          </div>
         </div>
         <textarea
           v-model="leftText"
           spellcheck="false"
+          placeholder="在此输入或粘贴第一段对比文本..."
           aria-label="左侧原始对比文本"
           class="flex-1 w-full p-3 bg-transparent font-mono text-[12.5px] leading-relaxed resize-none outline-none"
           :class="store.isDark ? 'text-slate-100' : 'text-slate-800'"
         ></textarea>
       </div>
       <div class="flex flex-col min-h-0">
-        <div class="px-3 py-1.5 text-[11px] font-mono text-slate-400 border-b border-inherit">
-          变更后文本 (Modified)
+        <div class="flex items-center justify-between px-3 py-1.5 text-[11px] font-mono text-slate-400 border-b border-inherit">
+          <span>变更后文本 2 (Modified)</span>
+          <div class="flex items-center gap-2 font-sans">
+            <button
+              type="button"
+              class="text-indigo-500 hover:underline cursor-pointer flex items-center gap-1"
+              @click="pasteToSide('right')"
+            >
+              <IconRenderer name="ClipboardPaste" :size="11" />
+              <span>粘贴</span>
+            </button>
+            <button
+              v-if="rightText"
+              type="button"
+              class="text-slate-400 hover:text-rose-500 cursor-pointer"
+              @click="rightText = ''"
+            >
+              清空
+            </button>
+          </div>
         </div>
         <textarea
           v-model="rightText"
           spellcheck="false"
+          placeholder="在此输入或粘贴第二段对比文本..."
           aria-label="右侧变更后对比文本"
           class="flex-1 w-full p-3 bg-transparent font-mono text-[12.5px] leading-relaxed resize-none outline-none"
           :class="store.isDark ? 'text-slate-100' : 'text-slate-800'"

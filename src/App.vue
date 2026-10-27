@@ -158,19 +158,33 @@ function syncWindowSizeWithCurrentState(isInitial = false) {
 }
 
 function handleWindowShownWithContext(ctx?: WindowShownContext) {
-  // Always exit settings / sub-plugin view when re-summoned via global hotkey after being hidden
-  store.activePluginId = null
-  store.subInputQuery = ''
-  store.isDetachedWindow = false
-  store.isWindowMaximized = false
   store.isSuperPanelOpen = false
   store.aiAnswerState = null
   store.toastMessage = null
-  isRecentGridExpanded.value = false
 
   const hiddenMsAgo = ctx?.hiddenMsAgo ?? 999_999_999
   const copiedMsAgo = ctx?.copiedMsAgo ?? 999_999_999
   const clipText = (ctx?.clipboardText || '').trim()
+
+  // Active workbench tool continuity:
+  // If the user was inside a tool (e.g. DiffViewer, JsonStudio, CalcPad, Authenticator, PasswordVault)
+  // and did NOT press Esc to return to the search bar before switching apps / hiding the window,
+  // keep them inside that tool if re-summoned within 5 minutes (300,000 ms)!
+  const TOOL_CONTINUITY_TIMEOUT_MS = 300_000
+  if (store.activePluginId) {
+    const isConfigPage = store.activePluginId === 'user-center'
+    if (!isConfigPage && hiddenMsAgo < TOOL_CONTINUITY_TIMEOUT_MS) {
+      syncWindowSizeWithCurrentState(false)
+      return
+    }
+    // Otherwise (left for >= 5 minutes or was in user-center settings), return to main search bar
+    store.activePluginId = null
+    store.subInputQuery = ''
+    store.isDetachedWindow = false
+    store.isWindowMaximized = false
+  }
+
+  isRecentGridExpanded.value = false
 
   const clearThresholdMs = resolveAutoClearThresholdMs(store.userSettings.autoClearWindow)
   const shouldClear = clearThresholdMs === 0 || hiddenMsAgo >= clearThresholdMs
@@ -327,13 +341,15 @@ onMounted(async () => {
   winObj.__omniboxOnWindowHidden = () => {
     store.isSuperPanelOpen = false
     store.aiAnswerState = null
-    store.activePluginId = null
-    store.subInputQuery = ''
-    store.isDetachedWindow = false
-    store.isWindowMaximized = false
-    isRecentGridExpanded.value = false
-    if (store.userSettings.autoClearWindow === '立即清空') {
-      store.searchQuery = ''
+    store.toastMessage = null
+    // Note: Do NOT clear `store.activePluginId` on window hide so that if the user switches to
+    // another app to copy text (e.g. Text 2 for DiffViewer) and re-opens OmniBox within 5 minutes,
+    // the active tool and its live DOM / cursor state remain intact!
+    if (!store.activePluginId) {
+      isRecentGridExpanded.value = false
+      if (store.userSettings.autoClearWindow === '立即清空') {
+        store.searchQuery = ''
+      }
     }
   }
   winObj.__omniboxOpenSuperPanel = (payload) => {
