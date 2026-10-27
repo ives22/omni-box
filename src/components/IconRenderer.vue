@@ -59,7 +59,15 @@ import {
   ChevronUp,
   ChevronDown,
   ChevronsUpDown,
-  WrapText
+  WrapText,
+  Table2,
+  Cloud,
+  Server,
+  ExternalLink,
+  CopyPlus,
+  FileSpreadsheet,
+  AlertTriangle,
+  Layers
 } from 'lucide-vue-next'
 
 const props = withDefaults(
@@ -135,7 +143,15 @@ const iconMap: Record<string, unknown> = {
   ChevronUp,
   ChevronDown,
   ChevronsUpDown,
-  WrapText
+  WrapText,
+  Table2,
+  Cloud,
+  Server,
+  ExternalLink,
+  CopyPlus,
+  FileSpreadsheet,
+  AlertTriangle,
+  Layers
 }
 
 const resolvedIcon = computed(() => {

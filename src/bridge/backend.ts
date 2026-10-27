@@ -38,6 +38,20 @@ export interface TotpEntry {
   category: string
 }
 
+export type VaultTemplateType = 'general' | 'cloud' | 'database'
+export type VaultEnvType = 'PROD' | 'PREV' | 'TEST' | 'DEV' | 'COMMON'
+
+export interface VaultSubAccount {
+  id: string
+  role: string
+  username: string
+  password: string
+  accessKeyId?: string
+  accessKeySecret?: string
+  extraSecret?: string
+  notes?: string
+}
+
 export interface VaultEntry {
   id: string
   title: string
@@ -47,6 +61,17 @@ export interface VaultEntry {
   category: string
   notes: string
   updatedAt: number
+  // Extended multi-dimensional fields for DevOps / Cloud / DB management
+  templateType?: VaultTemplateType
+  env?: VaultEnvType
+  componentType?: string
+  moduleName?: string
+  publicAddress?: string
+  privateAddress?: string
+  accessKeyId?: string
+  accessKeySecret?: string
+  extraSecret?: string
+  subAccounts?: VaultSubAccount[]
 }
 
 export interface ExternalUtoolsPlugin {
