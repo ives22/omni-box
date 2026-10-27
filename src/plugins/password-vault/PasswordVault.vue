@@ -474,8 +474,22 @@ function isSubPasswordVisible(subId: string): boolean {
 }
 
 let clipboardClearTimer: ReturnType<typeof setTimeout> | null = null
+const copiedTargetKey = ref<string>('')
+let copiedFeedbackTimer: ReturnType<typeof setTimeout> | null = null
 
-async function copyField(text: string | undefined, label: string) {
+function isCopied(key: string): boolean {
+  return copiedTargetKey.value === key
+}
+
+function triggerInPlaceCopyFeedback(key: string) {
+  copiedTargetKey.value = key
+  if (copiedFeedbackTimer) clearTimeout(copiedFeedbackTimer)
+  copiedFeedbackTimer = setTimeout(() => {
+    copiedTargetKey.value = ''
+  }, 1350)
+}
+
+async function copyField(text: string | undefined, label: string, feedbackKey?: string) {
   const clean = (text || '').trim()
   if (!clean) {
     store.showToast(`${label}为空`, 'warning')
@@ -483,6 +497,7 @@ async function copyField(text: string | undefined, label: string) {
   }
   await navigator.clipboard.writeText(clean)
   syncSessionCache()
+  triggerInPlaceCopyFeedback(feedbackKey || label)
 
   const isSecret = /密码|Secret|SK|AK|密钥/i.test(label)
   const clearSec = store.userSettings.vaultClipboardClearSeconds ?? 30
@@ -877,6 +892,7 @@ async function exportVaultAsTsv() {
   }
 
   await navigator.clipboard.writeText(lines.join('\n'))
+  triggerInPlaceCopyFeedback('export-tsv')
   store.showToast('已将当前筛选账密按 Excel 表格格式复制到剪贴板，可直接粘贴至 Excel！')
 }
 
@@ -1147,11 +1163,12 @@ onUnmounted(() => {
 
           <button
             type="button"
-            class="btn-secondary !py-1 !px-1.5 text-[11px]"
+            class="btn-secondary !py-1 !px-1.5 text-[11px] transition-colors"
+            :class="isCopied('export-tsv') ? '!border-emerald-500/60 !text-emerald-500' : ''"
             title="导出复制为 Excel 表格格式"
             @click="exportVaultAsTsv"
           >
-            <IconRenderer name="Download" :size="13" />
+            <IconRenderer :name="isCopied('export-tsv') ? 'Check' : 'Download'" :size="13" />
           </button>
 
           <button
@@ -1229,10 +1246,11 @@ onUnmounted(() => {
           </button>
           <button
             type="button"
-            class="btn-primary !py-1 !px-2.5 text-[11px]"
-            @click="copyField(generatedPassword, '随机强密码')"
+            class="btn-primary !py-1 !px-2.5 text-[11px] flex items-center gap-1"
+            @click="copyField(generatedPassword, '随机强密码', 'gen-pwd')"
           >
-            复制密码
+            <IconRenderer v-if="isCopied('gen-pwd')" name="Check" :size="12" />
+            <span>{{ isCopied('gen-pwd') ? '已复制' : '复制密码' }}</span>
           </button>
         </div>
       </div>
@@ -1402,14 +1420,16 @@ onUnmounted(() => {
                       <button
                         v-if="item.publicAddress"
                         type="button"
-                        class="w-full flex items-start justify-between gap-1.5 px-2 py-1.5 rounded-lg border text-left cursor-pointer transition-colors"
-                        :class="
-                          store.isDark
-                            ? 'bg-obsidian-950/70 border-slate-800 hover:border-sky-500/50 text-slate-300'
-                            : 'bg-white border-slate-200/90 hover:border-sky-400 text-slate-700 shadow-2xs'
-                        "
+                        class="w-full flex items-start justify-between gap-1.5 px-2 py-1.5 rounded-lg border text-left cursor-pointer transition-all"
+                        :class="[
+                          isCopied(`pub-${item.id}`)
+                            ? 'border-emerald-500/80 ring-1 ring-emerald-500/20 bg-emerald-500/5'
+                            : store.isDark
+                              ? 'bg-obsidian-950/70 border-slate-800 hover:border-sky-500/50 text-slate-300'
+                              : 'bg-white border-slate-200/90 hover:border-sky-400 text-slate-700 shadow-2xs'
+                        ]"
                         title="点击复制外网连接串 (Pub)"
-                        @click="copyField(item.publicAddress, `${item.title} 外网地址(Pub)`)"
+                        @click="copyField(item.publicAddress, `${item.title} 外网地址(Pub)`, `pub-${item.id}`)"
                       >
                         <span class="px-1 py-0.5 rounded text-[9px] font-sans font-semibold bg-sky-500/15 text-sky-500 shrink-0 mt-0.5 leading-none">
                           Pub
@@ -1417,20 +1437,26 @@ onUnmounted(() => {
                         <span class="flex-1 min-w-0 break-all whitespace-normal leading-snug">
                           {{ item.publicAddress }}
                         </span>
-                        <IconRenderer name="Copy" :size="11" class="text-slate-400 shrink-0 mt-0.5" />
+                        <IconRenderer
+                          :name="isCopied(`pub-${item.id}`) ? 'Check' : 'Copy'"
+                          :size="11"
+                          :class="isCopied(`pub-${item.id}`) ? 'text-emerald-500 shrink-0 mt-0.5' : 'text-slate-400 shrink-0 mt-0.5'"
+                        />
                       </button>
 
                       <button
                         v-if="item.privateAddress"
                         type="button"
-                        class="w-full flex items-start justify-between gap-1.5 px-2 py-1.5 rounded-lg border text-left cursor-pointer transition-colors"
-                        :class="
-                          store.isDark
-                            ? 'bg-obsidian-950/70 border-slate-800 hover:border-emerald-500/50 text-slate-300'
-                            : 'bg-white border-slate-200/90 hover:border-emerald-400 text-slate-700 shadow-2xs'
-                        "
+                        class="w-full flex items-start justify-between gap-1.5 px-2 py-1.5 rounded-lg border text-left cursor-pointer transition-all"
+                        :class="[
+                          isCopied(`priv-${item.id}`)
+                            ? 'border-emerald-500/80 ring-1 ring-emerald-500/20 bg-emerald-500/5'
+                            : store.isDark
+                              ? 'bg-obsidian-950/70 border-slate-800 hover:border-emerald-500/50 text-slate-300'
+                              : 'bg-white border-slate-200/90 hover:border-emerald-400 text-slate-700 shadow-2xs'
+                        ]"
                         title="点击复制内网连接串 (Private)"
-                        @click="copyField(item.privateAddress, `${item.title} 内网地址(Private)`)"
+                        @click="copyField(item.privateAddress, `${item.title} 内网地址(Private)`, `priv-${item.id}`)"
                       >
                         <span class="px-1 py-0.5 rounded text-[9px] font-sans font-semibold bg-emerald-500/15 text-emerald-500 shrink-0 mt-0.5 leading-none">
                           Priv
@@ -1438,34 +1464,41 @@ onUnmounted(() => {
                         <span class="flex-1 min-w-0 break-all whitespace-normal leading-snug">
                           {{ item.privateAddress }}
                         </span>
-                        <IconRenderer name="Copy" :size="11" class="text-slate-400 shrink-0 mt-0.5" />
+                        <IconRenderer
+                          :name="isCopied(`priv-${item.id}`) ? 'Check' : 'Copy'"
+                          :size="11"
+                          :class="isCopied(`priv-${item.id}`) ? 'text-emerald-500 shrink-0 mt-0.5' : 'text-slate-400 shrink-0 mt-0.5'"
+                        />
                       </button>
                     </template>
 
                     <div
                       v-else-if="item.url"
-                      class="w-full flex items-start justify-between gap-1.5 px-2 py-1.5 rounded-lg border"
-                      :class="
-                        store.isDark
-                          ? 'bg-obsidian-950/70 border-slate-800 text-slate-300'
-                          : 'bg-white border-slate-200/90 text-slate-700 shadow-2xs'
-                      "
+                      class="w-full flex items-start justify-between gap-1.5 px-2 py-1.5 rounded-lg border transition-all"
+                      :class="[
+                        isCopied(`url-${item.id}`)
+                          ? 'border-emerald-500/80 ring-1 ring-emerald-500/20 bg-emerald-500/5'
+                          : store.isDark
+                            ? 'bg-obsidian-950/70 border-slate-800 text-slate-300'
+                            : 'bg-white border-slate-200/90 text-slate-700 shadow-2xs'
+                      ]"
                     >
                       <span
                         class="flex-1 min-w-0 break-all whitespace-normal leading-snug cursor-pointer hover:text-indigo-500"
                         title="点击复制地址"
-                        @click="copyField(item.url, `${item.title} 地址`)"
+                        @click="copyField(item.url, `${item.title} 地址`, `url-${item.id}`)"
                       >
                         {{ item.url }}
                       </span>
                       <div class="flex items-center gap-1 shrink-0 mt-0.5">
                         <button
                           type="button"
-                          class="p-0.5 text-slate-400 hover:text-indigo-500 cursor-pointer"
+                          class="p-0.5 cursor-pointer transition-colors"
+                          :class="isCopied(`url-${item.id}`) ? 'text-emerald-500' : 'text-slate-400 hover:text-indigo-500'"
                           title="复制地址"
-                          @click="copyField(item.url, `${item.title} 地址`)"
+                          @click="copyField(item.url, `${item.title} 地址`, `url-${item.id}`)"
                         >
-                          <IconRenderer name="Copy" :size="11" />
+                          <IconRenderer :name="isCopied(`url-${item.id}`) ? 'Check' : 'Copy'" :size="11" />
                         </button>
                         <button
                           v-if="/^https?:\/\//i.test(item.url)"
@@ -1503,13 +1536,23 @@ onUnmounted(() => {
                     <button
                       v-if="sub.username"
                       type="button"
-                      class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded font-mono text-[11px] cursor-pointer transition-colors hover:bg-indigo-500/10 whitespace-nowrap"
-                      :class="store.isDark ? 'text-slate-200 hover:text-indigo-300' : 'text-slate-800 hover:text-indigo-600'"
+                      class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded font-mono text-[11px] cursor-pointer transition-all whitespace-nowrap"
+                      :class="[
+                        isCopied(`user-${sub.id}`)
+                          ? 'bg-emerald-500/15 text-emerald-500 ring-1 ring-emerald-500/30'
+                          : store.isDark
+                            ? 'text-slate-200 hover:text-indigo-300 hover:bg-indigo-500/10'
+                            : 'text-slate-800 hover:text-indigo-600 hover:bg-indigo-500/10'
+                      ]"
                       :title="`点击复制账号: ${sub.username}`"
-                      @click="copyField(sub.username, `账号 (${sub.username})`)"
+                      @click="copyField(sub.username, `账号 (${sub.username})`, `user-${sub.id}`)"
                     >
                       <span>{{ sub.username }}</span>
-                      <IconRenderer name="Copy" :size="11" class="text-slate-400 shrink-0 opacity-75" />
+                      <IconRenderer
+                        :name="isCopied(`user-${sub.id}`) ? 'Check' : 'Copy'"
+                        :size="11"
+                        :class="isCopied(`user-${sub.id}`) ? 'text-emerald-500 shrink-0' : 'text-slate-400 shrink-0 opacity-75'"
+                      />
                     </button>
                     <span v-else class="text-slate-400 text-[11px]">—</span>
                   </div>
@@ -1524,12 +1567,14 @@ onUnmounted(() => {
                     <!-- Line 1: Primary Password Pill -->
                     <div
                       v-if="sub.password"
-                      class="inline-flex items-center rounded-md border overflow-hidden shrink-0"
-                      :class="
-                        store.isDark
-                          ? 'bg-obsidian-950 border-indigo-500/30'
-                          : 'bg-white border-indigo-200/90 shadow-2xs'
-                      "
+                      class="inline-flex items-center rounded-md border overflow-hidden shrink-0 transition-all"
+                      :class="[
+                        isCopied(`pwd-${sub.id}`)
+                          ? 'border-emerald-500/80 ring-1 ring-emerald-500/20 bg-emerald-500/5'
+                          : store.isDark
+                            ? 'bg-obsidian-950 border-indigo-500/30'
+                            : 'bg-white border-indigo-200/90 shadow-2xs'
+                      ]"
                     >
                       <button
                         type="button"
@@ -1543,18 +1588,24 @@ onUnmounted(() => {
                       <button
                         type="button"
                         class="px-2 py-0.5 font-mono text-[11px] flex items-center gap-1.5 cursor-pointer transition-colors whitespace-nowrap"
-                        :class="
-                          store.isDark
-                            ? 'text-indigo-300 hover:bg-indigo-500/20'
-                            : 'text-indigo-700 hover:bg-indigo-50'
-                        "
+                        :class="[
+                          isCopied(`pwd-${sub.id}`)
+                            ? 'text-emerald-500'
+                            : store.isDark
+                              ? 'text-indigo-300 hover:bg-indigo-500/20'
+                              : 'text-indigo-700 hover:bg-indigo-50'
+                        ]"
                         :title="`点击直接复制密码 (${sub.username || item.title})`"
-                        @click="copyField(sub.password, `${sub.username || item.title} 的密码`)"
+                        @click="copyField(sub.password, `${sub.username || item.title} 的密码`, `pwd-${sub.id}`)"
                       >
                         <span>
                           {{ isSubPasswordVisible(sub.id) ? sub.password : '••••••••' }}
                         </span>
-                        <IconRenderer name="Copy" :size="11" class="text-indigo-400 shrink-0 opacity-85" />
+                        <IconRenderer
+                          :name="isCopied(`pwd-${sub.id}`) ? 'Check' : 'Copy'"
+                          :size="11"
+                          :class="isCopied(`pwd-${sub.id}`) ? 'text-emerald-500 shrink-0' : 'text-indigo-400 shrink-0 opacity-85'"
+                        />
                       </button>
                     </div>
 
@@ -1566,34 +1617,38 @@ onUnmounted(() => {
                       <button
                         v-if="sub.accessKeyId"
                         type="button"
-                        class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] border cursor-pointer shrink-0"
-                        :class="
-                          store.isDark
-                            ? 'bg-amber-500/15 border-amber-500/35 text-amber-300 hover:bg-amber-500/25'
-                            : 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
-                        "
+                        class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] border cursor-pointer shrink-0 transition-all"
+                        :class="[
+                          isCopied(`ak-${sub.id}`)
+                            ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-500'
+                            : store.isDark
+                              ? 'bg-amber-500/15 border-amber-500/35 text-amber-300 hover:bg-amber-500/25'
+                              : 'bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100'
+                        ]"
                         :title="`点击复制 AccessKey ID: ${sub.accessKeyId}`"
-                        @click="copyField(sub.accessKeyId, 'AccessKey ID (AK)')"
+                        @click="copyField(sub.accessKeyId, 'AccessKey ID (AK)', `ak-${sub.id}`)"
                       >
                         <span class="font-sans font-semibold">AK:</span>
                         <span>{{ sub.accessKeyId }}</span>
-                        <IconRenderer name="Copy" :size="10" />
+                        <IconRenderer :name="isCopied(`ak-${sub.id}`) ? 'Check' : 'Copy'" :size="10" />
                       </button>
 
                       <button
                         v-if="sub.accessKeySecret"
                         type="button"
-                        class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] border cursor-pointer shrink-0"
-                        :class="
-                          store.isDark
-                            ? 'bg-amber-500/20 border-amber-500/40 text-amber-200 hover:bg-amber-500/30'
-                            : 'bg-amber-100/80 border-amber-300 text-amber-900 hover:bg-amber-200/80'
-                        "
+                        class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] border cursor-pointer shrink-0 transition-all"
+                        :class="[
+                          isCopied(`sk-${sub.id}`)
+                            ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-500'
+                            : store.isDark
+                              ? 'bg-amber-500/20 border-amber-500/40 text-amber-200 hover:bg-amber-500/30'
+                              : 'bg-amber-100/80 border-amber-300 text-amber-900 hover:bg-amber-200/80'
+                        ]"
                         title="点击复制 AccessKey Secret (SK)"
-                        @click="copyField(sub.accessKeySecret, 'AccessKey Secret (SK)')"
+                        @click="copyField(sub.accessKeySecret, 'AccessKey Secret (SK)', `sk-${sub.id}`)"
                       >
                         <span class="font-sans font-semibold">SK</span>
-                        <IconRenderer name="Copy" :size="10" />
+                        <IconRenderer :name="isCopied(`sk-${sub.id}`) ? 'Check' : 'Copy'" :size="10" />
                       </button>
                     </div>
 
@@ -1601,17 +1656,19 @@ onUnmounted(() => {
                     <button
                       v-if="sub.extraSecret"
                       type="button"
-                      class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] border cursor-pointer shrink-0"
-                      :class="
-                        store.isDark
-                          ? 'bg-purple-500/15 border-purple-500/35 text-purple-300 hover:bg-purple-500/25'
-                          : 'bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100'
-                      "
+                      class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded font-mono text-[10px] border cursor-pointer shrink-0 transition-all"
+                      :class="[
+                        isCopied(`extra-${sub.id}`)
+                          ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-500'
+                          : store.isDark
+                            ? 'bg-purple-500/15 border-purple-500/35 text-purple-300 hover:bg-purple-500/25'
+                            : 'bg-purple-50 border-purple-200 text-purple-700 hover:bg-purple-100'
+                      ]"
                       :title="`点击复制附加密钥: ${sub.extraSecret}`"
-                      @click="copyField(sub.extraSecret, '附加密钥/ACR密码')"
+                      @click="copyField(sub.extraSecret, '附加密钥/ACR密码', `extra-${sub.id}`)"
                     >
                       <span>{{ isSubPasswordVisible(sub.id) ? sub.extraSecret : '附加密钥/ACR' }}</span>
-                      <IconRenderer name="Copy" :size="9" />
+                      <IconRenderer :name="isCopied(`extra-${sub.id}`) ? 'Check' : 'Copy'" :size="9" />
                     </button>
                   </div>
                 </td>
@@ -1806,10 +1863,12 @@ onUnmounted(() => {
                 </div>
                 <button
                   type="button"
-                  class="btn-secondary !py-1 !px-2 text-[11px] shrink-0"
-                  @click="copyField(activeItem.publicAddress, '外网连接串(Pub)')"
+                  class="btn-secondary !py-1 !px-2 text-[11px] shrink-0 flex items-center gap-1"
+                  :class="isCopied(`split-pub-${activeItem.id}`) ? '!border-emerald-500/60 !text-emerald-500' : ''"
+                  @click="copyField(activeItem.publicAddress, '外网连接串(Pub)', `split-pub-${activeItem.id}`)"
                 >
-                  复制外网
+                  <IconRenderer v-if="isCopied(`split-pub-${activeItem.id}`)" name="Check" :size="11" />
+                  <span>{{ isCopied(`split-pub-${activeItem.id}`) ? '已复制' : '复制外网' }}</span>
                 </button>
               </div>
               <div v-if="activeItem.privateAddress" class="flex items-center justify-between gap-2">
@@ -1819,10 +1878,12 @@ onUnmounted(() => {
                 </div>
                 <button
                   type="button"
-                  class="btn-secondary !py-1 !px-2 text-[11px] shrink-0"
-                  @click="copyField(activeItem.privateAddress, '内网连接串(Private)')"
+                  class="btn-secondary !py-1 !px-2 text-[11px] shrink-0 flex items-center gap-1"
+                  :class="isCopied(`split-priv-${activeItem.id}`) ? '!border-emerald-500/60 !text-emerald-500' : ''"
+                  @click="copyField(activeItem.privateAddress, '内网连接串(Private)', `split-priv-${activeItem.id}`)"
                 >
-                  复制内网
+                  <IconRenderer v-if="isCopied(`split-priv-${activeItem.id}`)" name="Check" :size="11" />
+                  <span>{{ isCopied(`split-priv-${activeItem.id}`) ? '已复制' : '复制内网' }}</span>
                 </button>
               </div>
               <div
@@ -1832,10 +1893,12 @@ onUnmounted(() => {
                 <span class="font-mono truncate">{{ activeItem.url }}</span>
                 <button
                   type="button"
-                  class="btn-secondary !py-1 !px-2 text-[11px] shrink-0"
-                  @click="copyField(activeItem.url, '访问地址')"
+                  class="btn-secondary !py-1 !px-2 text-[11px] shrink-0 flex items-center gap-1"
+                  :class="isCopied(`split-url-${activeItem.id}`) ? '!border-emerald-500/60 !text-emerald-500' : ''"
+                  @click="copyField(activeItem.url, '访问地址', `split-url-${activeItem.id}`)"
                 >
-                  复制地址
+                  <IconRenderer v-if="isCopied(`split-url-${activeItem.id}`)" name="Check" :size="11" />
+                  <span>{{ isCopied(`split-url-${activeItem.id}`) ? '已复制' : '复制地址' }}</span>
                 </button>
               </div>
             </div>
@@ -1868,10 +1931,12 @@ onUnmounted(() => {
                     </div>
                     <button
                       type="button"
-                      class="btn-secondary !py-1 !px-2 text-[11px] shrink-0"
-                      @click="copyField(sub.username, '账号')"
+                      class="btn-secondary !py-1 !px-2 text-[11px] shrink-0 flex items-center gap-1"
+                      :class="isCopied(`split-user-${sub.id}`) ? '!border-emerald-500/60 !text-emerald-500' : ''"
+                      @click="copyField(sub.username, '账号', `split-user-${sub.id}`)"
                     >
-                      复制账号
+                      <IconRenderer v-if="isCopied(`split-user-${sub.id}`)" name="Check" :size="11" />
+                      <span>{{ isCopied(`split-user-${sub.id}`) ? '已复制' : '复制账号' }}</span>
                     </button>
                   </div>
 
@@ -1895,10 +1960,11 @@ onUnmounted(() => {
                       </button>
                       <button
                         type="button"
-                        class="btn-primary !py-1 !px-2 text-[11px]"
-                        @click="copyField(sub.password, '密码')"
+                        class="btn-primary !py-1 !px-2 text-[11px] flex items-center gap-1"
+                        @click="copyField(sub.password, '密码', `split-pwd-${sub.id}`)"
                       >
-                        复制密码
+                        <IconRenderer v-if="isCopied(`split-pwd-${sub.id}`)" name="Check" :size="11" />
+                        <span>{{ isCopied(`split-pwd-${sub.id}`) ? '已复制' : '复制密码' }}</span>
                       </button>
                     </div>
                   </div>
@@ -1911,26 +1977,32 @@ onUnmounted(() => {
                   <button
                     v-if="sub.accessKeyId"
                     type="button"
-                    class="btn-secondary !py-1 !px-2.5 text-[11px] font-mono"
-                    @click="copyField(sub.accessKeyId, 'AccessKey ID')"
+                    class="btn-secondary !py-1 !px-2.5 text-[11px] font-mono flex items-center gap-1"
+                    :class="isCopied(`split-ak-${sub.id}`) ? '!border-emerald-500/60 !text-emerald-500' : ''"
+                    @click="copyField(sub.accessKeyId, 'AccessKey ID', `split-ak-${sub.id}`)"
                   >
-                    复制 AK ({{ sub.accessKeyId }})
+                    <IconRenderer v-if="isCopied(`split-ak-${sub.id}`)" name="Check" :size="11" />
+                    <span>{{ isCopied(`split-ak-${sub.id}`) ? 'AK 已复制' : `复制 AK (${sub.accessKeyId})` }}</span>
                   </button>
                   <button
                     v-if="sub.accessKeySecret"
                     type="button"
-                    class="btn-secondary !py-1 !px-2.5 text-[11px]"
-                    @click="copyField(sub.accessKeySecret, 'AccessKey Secret')"
+                    class="btn-secondary !py-1 !px-2.5 text-[11px] flex items-center gap-1"
+                    :class="isCopied(`split-sk-${sub.id}`) ? '!border-emerald-500/60 !text-emerald-500' : ''"
+                    @click="copyField(sub.accessKeySecret, 'AccessKey Secret', `split-sk-${sub.id}`)"
                   >
-                    复制 AccessKey Secret (SK)
+                    <IconRenderer v-if="isCopied(`split-sk-${sub.id}`)" name="Check" :size="11" />
+                    <span>{{ isCopied(`split-sk-${sub.id}`) ? 'SK 已复制' : '复制 AccessKey Secret (SK)' }}</span>
                   </button>
                   <button
                     v-if="sub.extraSecret"
                     type="button"
-                    class="btn-secondary !py-1 !px-2.5 text-[11px]"
-                    @click="copyField(sub.extraSecret, '附加密钥/ACR密码')"
+                    class="btn-secondary !py-1 !px-2.5 text-[11px] flex items-center gap-1"
+                    :class="isCopied(`split-extra-${sub.id}`) ? '!border-emerald-500/60 !text-emerald-500' : ''"
+                    @click="copyField(sub.extraSecret, '附加密钥/ACR密码', `split-extra-${sub.id}`)"
                   >
-                    复制附加密钥 ({{ sub.extraSecret }})
+                    <IconRenderer v-if="isCopied(`split-extra-${sub.id}`)" name="Check" :size="11" />
+                    <span>{{ isCopied(`split-extra-${sub.id}`) ? '已复制' : `复制附加密钥 (${sub.extraSecret})` }}</span>
                   </button>
                 </div>
               </div>

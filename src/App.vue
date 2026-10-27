@@ -389,17 +389,21 @@ onUnmounted(() => {
       leave-to-class="opacity-0 -translate-y-2 scale-95"
     >
       <div
-        v-if="store.toastMessage && (store.activePluginId || store.isSuperPanelOpen || store.aiAnswerState)"
+        v-if="store.toastMessage"
         role="status"
         aria-live="polite"
-        class="fixed top-3 z-50 flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium shadow-lg border"
+        class="fixed top-2.5 z-[120] pointer-events-none flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-xs font-medium shadow-xl border backdrop-blur-md"
         :class="
           store.isDark
-            ? 'bg-[#0E131F] border-indigo-500/40 text-indigo-200'
-            : 'bg-slate-900 text-white border-slate-800'
+            ? 'bg-[#0E131F]/95 border-emerald-500/40 text-slate-100'
+            : 'bg-slate-900/95 text-white border-slate-700'
         "
       >
-        <IconRenderer name="Check" :size="13" class-name="text-indigo-400" />
+        <IconRenderer
+          :name="store.toastType === 'warning' ? 'AlertTriangle' : 'Check'"
+          :size="13"
+          :class-name="store.toastType === 'warning' ? 'text-amber-400' : 'text-emerald-400'"
+        />
         <span>{{ store.toastMessage }}</span>
       </div>
     </Transition>
