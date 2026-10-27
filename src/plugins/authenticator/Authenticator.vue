@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 import { useLauncherStore } from '@/stores/launcher'
 import {
   TotpEntry,
@@ -38,6 +38,16 @@ const showRawSecretInModal = ref(false)
 
 // Two-step Deletion Confirmation Modal State
 const pendingDeleteEntry = ref<TotpEntry | null>(null)
+
+// Edit Token Modal State
+const editingEntry = ref<TotpEntry | null>(null)
+const editIssuer = ref('')
+const editAccount = ref('')
+const editCategory = ref('')
+const editSecret = ref('')
+const showEditSecret = ref(false)
+const editIssuerInputRef = ref<HTMLInputElement | null>(null)
+const CATEGORY_PRESETS = ['开发平台', '云服务', '办公套件', '基础设施', '通用']
 
 const filteredEntries = computed(() => {
   const q = store.subInputQuery.trim().toLowerCase()
@@ -373,6 +383,52 @@ async function handleAddEntry() {
   store.showToast(`已添加 ${newEntry.issuer} 2FA 令牌`)
 }
 
+function openEditModal(entry: TotpEntry) {
+  editingEntry.value = entry
+  editIssuer.value = entry.issuer
+  editAccount.value = entry.account
+  editCategory.value = entry.category || '开发平台'
+  editSecret.value = entry.secret
+  showEditSecret.value = false
+  nextTick(() => {
+    editIssuerInputRef.value?.focus()
+    editIssuerInputRef.value?.select()
+  })
+}
+
+async function saveEditedEntry() {
+  const target = editingEntry.value
+  if (!target) return
+
+  const issuerName = editIssuer.value.trim()
+  const accountName = editAccount.value.trim() || 'default@account'
+  const cleanedSecret = sanitizeBase32Secret(editSecret.value)
+
+  if (!issuerName || !cleanedSecret) {
+    store.showToast('服务商名称与 Base32 密钥不能为空', 'warning')
+    return
+  }
+
+  const finalCategory =
+    editCategory.value.trim() || inferCategoryFromIssuer(issuerName, accountName)
+
+  const updatedList = store.totpEntries.map((item) => {
+    if (item.id !== target.id) return item
+    return {
+      ...item,
+      issuer: issuerName,
+      account: accountName,
+      category: finalCategory,
+      secret: cleanedSecret
+    }
+  })
+
+  await store.saveTotpEntries(updatedList)
+  editingEntry.value = null
+  flashHighlightCard(target.id)
+  store.showToast(`已保存对 ${issuerName} 的修改`)
+}
+
 function requestDeleteEntry(entry: TotpEntry) {
   pendingDeleteEntry.value = entry
 }
@@ -429,6 +485,10 @@ onMounted(() => {
     __omniboxPluginInterceptEscape?: () => boolean
   }
   winObj.__omniboxPluginInterceptEscape = () => {
+    if (editingEntry.value) {
+      editingEntry.value = null
+      return true
+    }
     if (pendingDeleteEntry.value) {
       pendingDeleteEntry.value = null
       return true
@@ -696,6 +756,17 @@ onUnmounted(() => {
           </div>
 
           <div class="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+            <!-- Edit Token Info (Issuer / Account / Category) -->
+            <button
+              type="button"
+              title="编辑名称、账号或分类"
+              aria-label="编辑令牌"
+              class="p-1.5 rounded-lg text-slate-400 hover:text-indigo-500 hover:bg-indigo-500/10 transition-colors cursor-pointer"
+              @click.stop="openEditModal(item)"
+            >
+              <IconRenderer name="Pencil" :size="14" />
+            </button>
+
             <!-- Show QR Code for Mobile Sync -->
             <button
               type="button"
@@ -1001,6 +1072,156 @@ onUnmounted(() => {
           >
             <IconRenderer name="Trash2" :size="13" />
             <span>确认永久删除</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- Edit 2FA Token Modal (Edit Issuer Name, Account, Category & Secret)   -->
+    <!-- ===================================================================== -->
+    <div
+      v-if="editingEntry"
+      class="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
+      @click.self="editingEntry = null"
+    >
+      <div
+        class="w-full max-w-[400px] rounded-2xl border p-5 shadow-2xl space-y-3.5"
+        :class="
+          store.isDark
+            ? 'bg-[#111827] border-slate-800 text-slate-100'
+            : 'bg-white border-slate-200 text-slate-800'
+        "
+        @keydown.enter="saveEditedEntry"
+      >
+        <div class="flex items-start justify-between">
+          <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 rounded-xl bg-indigo-500/15 text-indigo-500 flex items-center justify-center shrink-0">
+              <IconRenderer name="Pencil" :size="15" />
+            </div>
+            <div>
+              <h3 class="text-sm font-bold">编辑 2FA 令牌信息</h3>
+              <p class="text-[11px] text-slate-400">修改平台名称、关联账号或分类标签</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+            @click="editingEntry = null"
+          >
+            <IconRenderer name="X" :size="15" />
+          </button>
+        </div>
+
+        <div class="space-y-3 text-xs">
+          <!-- Issuer Name -->
+          <div class="space-y-1">
+            <label class="block text-[11px] font-medium text-slate-400">服务商 / 平台名称</label>
+            <input
+              ref="editIssuerInputRef"
+              v-model="editIssuer"
+              type="text"
+              placeholder="例如：GitHub / AWS / 公司内网"
+              class="w-full px-3 py-1.5 rounded-xl border outline-none focus:ring-2 focus:ring-indigo-500/25 focus:border-indigo-500"
+              :class="
+                store.isDark
+                  ? 'bg-slate-900 border-slate-700 text-slate-100'
+                  : 'bg-slate-50 border-slate-300 text-slate-800'
+              "
+            />
+          </div>
+
+          <!-- Account / Email -->
+          <div class="space-y-1">
+            <label class="block text-[11px] font-medium text-slate-400">账号 / 邮箱备注</label>
+            <input
+              v-model="editAccount"
+              type="text"
+              placeholder="例如：dev@omnibox.io"
+              class="w-full px-3 py-1.5 rounded-xl font-mono border outline-none focus:ring-2 focus:ring-indigo-500/25 focus:border-indigo-500"
+              :class="
+                store.isDark
+                  ? 'bg-slate-900 border-slate-700 text-slate-100'
+                  : 'bg-slate-50 border-slate-300 text-slate-800'
+              "
+            />
+          </div>
+
+          <!-- Category Pills + Custom Category Input -->
+          <div class="space-y-1.5">
+            <label class="block text-[11px] font-medium text-slate-400">所属分类</label>
+            <div class="flex flex-wrap items-center gap-1.5">
+              <button
+                v-for="cat in CATEGORY_PRESETS"
+                :key="cat"
+                type="button"
+                class="px-2.5 py-1 rounded-lg text-[11px] font-medium border cursor-pointer transition-colors"
+                :class="
+                  editCategory === cat
+                    ? 'bg-indigo-600 border-indigo-600 text-white'
+                    : store.isDark
+                      ? 'bg-slate-800 border-slate-700 text-slate-300 hover:border-indigo-500/50'
+                      : 'bg-slate-100 border-slate-200 text-slate-600 hover:border-indigo-300'
+                "
+                @click="editCategory = cat"
+              >
+                {{ cat }}
+              </button>
+              <input
+                v-model="editCategory"
+                type="text"
+                placeholder="自定义分类..."
+                class="flex-1 min-w-[90px] px-2.5 py-1 rounded-lg text-[11px] border outline-none focus:border-indigo-500"
+                :class="
+                  store.isDark
+                    ? 'bg-slate-900 border-slate-700 text-slate-200'
+                    : 'bg-slate-50 border-slate-300 text-slate-800'
+                "
+              />
+            </div>
+          </div>
+
+          <!-- Base32 Secret (Protected with Eye Toggle) -->
+          <div class="space-y-1">
+            <div class="flex items-center justify-between">
+              <label class="text-[11px] font-medium text-slate-400">Base32 密钥</label>
+              <button
+                type="button"
+                class="text-[11px] text-slate-400 hover:text-indigo-500 flex items-center gap-1 cursor-pointer"
+                @click="showEditSecret = !showEditSecret"
+              >
+                <IconRenderer :name="showEditSecret ? 'EyeOff' : 'Eye'" :size="12" />
+                <span>{{ showEditSecret ? '隐藏密钥' : '显示/修改密钥' }}</span>
+              </button>
+            </div>
+            <input
+              v-model="editSecret"
+              :type="showEditSecret ? 'text' : 'password'"
+              placeholder="Base32 密钥 (A-Z, 2-7)"
+              class="w-full px-3 py-1.5 rounded-xl font-mono border outline-none focus:ring-2 focus:ring-indigo-500/25 focus:border-indigo-500"
+              :class="
+                store.isDark
+                  ? 'bg-slate-900 border-slate-700 text-slate-100'
+                  : 'bg-slate-50 border-slate-300 text-slate-800'
+              "
+            />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2.5 text-xs pt-1.5">
+          <button
+            type="button"
+            class="btn-secondary py-2 font-medium"
+            @click="editingEntry = null"
+          >
+            取消 (Esc)
+          </button>
+          <button
+            type="button"
+            class="btn-primary py-2 font-semibold"
+            @click="saveEditedEntry"
+          >
+            保存修改 (Enter)
           </button>
         </div>
       </div>

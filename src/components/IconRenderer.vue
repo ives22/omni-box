@@ -53,7 +53,8 @@ import {
   QrCode,
   ImageUp,
   ClipboardPaste,
-  Bookmark
+  Bookmark,
+  Pencil
 } from 'lucide-vue-next'
 
 const props = withDefaults(
@@ -123,7 +124,8 @@ const iconMap: Record<string, unknown> = {
   QrCode,
   ImageUp,
   ClipboardPaste,
-  Bookmark
+  Bookmark,
+  Pencil
 }
 
 const resolvedIcon = computed(() => {
