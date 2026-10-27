@@ -36,6 +36,9 @@ const activeQrDataUrl = ref('')
 const activeQrOtpUri = ref('')
 const showRawSecretInModal = ref(false)
 
+// Two-step Deletion Confirmation Modal State
+const pendingDeleteEntry = ref<TotpEntry | null>(null)
+
 const filteredEntries = computed(() => {
   const q = store.subInputQuery.trim().toLowerCase()
   if (!q) return store.totpEntries
@@ -370,13 +373,30 @@ async function handleAddEntry() {
   store.showToast(`已添加 ${newEntry.issuer} 2FA 令牌`)
 }
 
-async function removeEntry(id: string) {
+function requestDeleteEntry(entry: TotpEntry) {
+  pendingDeleteEntry.value = entry
+}
+
+async function confirmDeleteEntry() {
+  const target = pendingDeleteEntry.value
+  if (!target) return
+  const id = target.id
+  const issuerName = target.issuer
+  pendingDeleteEntry.value = null
+
   const next = store.totpEntries.filter((e) => e.id !== id)
   await store.saveTotpEntries(next)
   if (activeQrModalEntry.value?.id === id) {
     activeQrModalEntry.value = null
   }
-  store.showToast('已移除该 2FA 令牌', 'info')
+  store.showToast(`已删除 ${issuerName} 的 2FA 令牌`, 'info')
+}
+
+async function backupBeforeDelete() {
+  const target = pendingDeleteEntry.value
+  if (!target) return
+  pendingDeleteEntry.value = null
+  await openEntryQrModal(target)
 }
 
 /**
@@ -409,6 +429,10 @@ onMounted(() => {
     __omniboxPluginInterceptEscape?: () => boolean
   }
   winObj.__omniboxPluginInterceptEscape = () => {
+    if (pendingDeleteEntry.value) {
+      pendingDeleteEntry.value = null
+      return true
+    }
     if (activeQrModalEntry.value) {
       activeQrModalEntry.value = null
       return true
@@ -683,13 +707,13 @@ onUnmounted(() => {
               <IconRenderer name="QrCode" :size="14" />
             </button>
 
-            <!-- Delete Token -->
+            <!-- Delete Token (Opens Confirmation Modal) -->
             <button
               type="button"
-              title="删除此令牌"
+              title="删除此令牌（需二次确认）"
               aria-label="删除令牌"
               class="p-1.5 rounded-lg text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 transition-colors cursor-pointer"
-              @click.stop="removeEntry(item.id)"
+              @click.stop="requestDeleteEntry(item)"
             >
               <IconRenderer name="Trash2" :size="14" />
             </button>
@@ -876,6 +900,107 @@ onUnmounted(() => {
           >
             <IconRenderer name="Download" :size="13" />
             <span>下载二维码图片</span>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- Two-Step Delete Confirmation Modal (Prevents Accidental Data Loss)    -->
+    <!-- ===================================================================== -->
+    <div
+      v-if="pendingDeleteEntry"
+      class="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4"
+      @click.self="pendingDeleteEntry = null"
+    >
+      <div
+        class="w-full max-w-[380px] rounded-2xl border p-5 shadow-2xl space-y-4"
+        :class="
+          store.isDark
+            ? 'bg-[#111827] border-slate-800 text-slate-100'
+            : 'bg-white border-slate-200 text-slate-800'
+        "
+      >
+        <div class="flex items-start justify-between">
+          <div class="flex items-center gap-2.5">
+            <div class="w-9 h-9 rounded-xl bg-rose-500/15 text-rose-500 flex items-center justify-center shrink-0">
+              <IconRenderer name="Trash2" :size="18" />
+            </div>
+            <div>
+              <h3 class="text-sm font-bold">确认删除该 2FA 令牌？</h3>
+              <p class="text-[11px] text-slate-400 mt-0.5">此操作不可撤销，请确认已备份或不再需要</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+            @click="pendingDeleteEntry = null"
+          >
+            <IconRenderer name="X" :size="15" />
+          </button>
+        </div>
+
+        <!-- Target Token Info Card -->
+        <div
+          class="px-3.5 py-3 rounded-xl border space-y-1"
+          :class="
+            store.isDark
+              ? 'bg-slate-900/90 border-slate-800'
+              : 'bg-slate-50 border-slate-200/80'
+          "
+        >
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="text-xs font-bold truncate">{{ pendingDeleteEntry.issuer }}</span>
+              <span
+                class="px-1.5 py-0.5 text-[10px] rounded-md font-medium border shrink-0"
+                :class="
+                  store.isDark
+                    ? 'bg-slate-800 border-slate-700 text-slate-400'
+                    : 'bg-white border-slate-200 text-slate-600'
+                "
+              >
+                {{ pendingDeleteEntry.category }}
+              </span>
+            </div>
+            <button
+              type="button"
+              class="text-[11px] text-indigo-500 hover:underline flex items-center gap-1 shrink-0 cursor-pointer"
+              @click="backupBeforeDelete"
+            >
+              <IconRenderer name="QrCode" :size="12" />
+              <span>先备份二维码</span>
+            </button>
+          </div>
+          <p class="text-xs font-mono text-slate-400 truncate">{{ pendingDeleteEntry.account }}</p>
+        </div>
+
+        <p
+          class="text-[11.5px] leading-relaxed px-3 py-2 rounded-xl border"
+          :class="
+            store.isDark
+              ? 'bg-rose-500/10 border-rose-500/25 text-rose-300'
+              : 'bg-rose-50 border-rose-200/80 text-rose-700'
+          "
+        >
+          删除后将无法继续生成该账号的 6 位动态验证码。若目标平台仍开启双因素验证，请务必先导出备份密钥。
+        </p>
+
+        <div class="grid grid-cols-2 gap-2.5 text-xs pt-1">
+          <button
+            type="button"
+            class="btn-secondary py-2 font-medium"
+            @click="pendingDeleteEntry = null"
+          >
+            取消 (Esc)
+          </button>
+          <button
+            type="button"
+            class="py-2 px-3 rounded-xl font-semibold text-white bg-rose-600 hover:bg-rose-500 active:bg-rose-700 transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+            @click="confirmDeleteEntry"
+          >
+            <IconRenderer name="Trash2" :size="13" />
+            <span>确认永久删除</span>
           </button>
         </div>
       </div>
