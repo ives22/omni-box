@@ -883,6 +883,12 @@ async function exportVaultAsTsv() {
 let autoLockCheckInterval: ReturnType<typeof setInterval> | null = null
 
 onMounted(() => {
+  if (store.userSettings.vaultAutoLockMinutes === undefined) {
+    store.userSettings.vaultAutoLockMinutes = 15
+  }
+  if (store.userSettings.vaultClipboardClearSeconds === undefined) {
+    store.userSettings.vaultClipboardClearSeconds = 30
+  }
   generateStrongPassword()
   // Check if session cache is still valid within auto-lock window
   const cached = globalObj.__omniboxVaultSession

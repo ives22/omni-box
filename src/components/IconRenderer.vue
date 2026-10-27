@@ -67,7 +67,10 @@ import {
   CopyPlus,
   FileSpreadsheet,
   AlertTriangle,
-  Layers
+  Layers,
+  Clock,
+  ClipboardCheck,
+  Shield
 } from 'lucide-vue-next'
 
 const props = withDefaults(
@@ -151,7 +154,10 @@ const iconMap: Record<string, unknown> = {
   CopyPlus,
   FileSpreadsheet,
   AlertTriangle,
-  Layers
+  Layers,
+  Clock,
+  ClipboardCheck,
+  Shield
 }
 
 const resolvedIcon = computed(() => {

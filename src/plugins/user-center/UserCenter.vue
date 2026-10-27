@@ -67,6 +67,14 @@ const showOldMasterPwd = ref(false)
 const showNewMasterPwd = ref(false)
 const vaultSessionUnlocked = ref(Boolean((window as any).__omniboxVaultSession))
 
+// Ensure default values are populated even for legacy persisted userSettings
+if (store.userSettings.vaultAutoLockMinutes === undefined) {
+  store.userSettings.vaultAutoLockMinutes = 15
+}
+if (store.userSettings.vaultClipboardClearSeconds === undefined) {
+  store.userSettings.vaultClipboardClearSeconds = 30
+}
+
 // Backup Snapshot State
 const snapshotJsonText = ref('')
 const showImportBox = ref(false)
@@ -1463,14 +1471,14 @@ async function triggerWebdavSync() {
               </button>
             </div>
 
-            <!-- Divider: Auto-Lock Duration & Clipboard Auto-Clear -->
+            <!-- Divider: Auto-Lock Duration & Clipboard Auto-Clear (Stacked Single-Column Layout) -->
             <div
-              class="pt-3 border-t grid grid-cols-1 sm:grid-cols-2 gap-3"
+              class="pt-3 border-t space-y-2.5"
               :class="store.isDark ? 'border-slate-800/80' : 'border-slate-100'"
             >
               <!-- Setting 1: Auto-lock duration after unlock -->
               <div
-                class="p-3 rounded-xl border flex items-center justify-between gap-2"
+                class="p-3 rounded-xl border flex items-center justify-between gap-4"
                 :class="
                   store.isDark
                     ? 'bg-obsidian-900/60 border-slate-800/90'
@@ -1479,17 +1487,17 @@ async function triggerWebdavSync() {
               >
                 <div class="min-w-0">
                   <div class="font-semibold text-[12px] flex items-center gap-1.5">
-                    <IconRenderer name="Clock" :size="13" class="text-indigo-500 shrink-0" />
+                    <IconRenderer name="Clock" :size="14" class="text-indigo-500 shrink-0" />
                     <span>解锁后自动锁定时间</span>
                   </div>
                   <div class="text-[11px] text-slate-400 mt-0.5">
-                    超时后自动擦除内存密钥并重新锁定
+                    密码本解锁后在后台保持免密访问的时长，超时后自动擦除内存密钥并重新锁定
                   </div>
                 </div>
                 <select
                   v-model.number="store.userSettings.vaultAutoLockMinutes"
                   aria-label="密码本解锁后自动锁定时间"
-                  class="px-2.5 py-1.5 rounded-lg text-xs font-medium border outline-none cursor-pointer shrink-0"
+                  class="px-3 py-1.5 rounded-lg text-xs font-medium border outline-none cursor-pointer shrink-0 min-w-[175px]"
                   :class="
                     store.isDark
                       ? 'bg-obsidian-950 border-slate-700 text-slate-200'
@@ -1509,7 +1517,7 @@ async function triggerWebdavSync() {
 
               <!-- Setting 2: Auto-clear clipboard after copying sensitive password/AK/SK -->
               <div
-                class="p-3 rounded-xl border flex items-center justify-between gap-2"
+                class="p-3 rounded-xl border flex items-center justify-between gap-4"
                 :class="
                   store.isDark
                     ? 'bg-obsidian-900/60 border-slate-800/90'
@@ -1518,17 +1526,17 @@ async function triggerWebdavSync() {
               >
                 <div class="min-w-0">
                   <div class="font-semibold text-[12px] flex items-center gap-1.5">
-                    <IconRenderer name="ClipboardCheck" :size="13" class="text-indigo-500 shrink-0" />
+                    <IconRenderer name="ClipboardCheck" :size="14" class="text-indigo-500 shrink-0" />
                     <span>复制密码后自动清理剪贴板</span>
                   </div>
                   <div class="text-[11px] text-slate-400 mt-0.5">
-                    复制密码或 SK 后倒计时清空剪贴板防泄漏
+                    在密码本中复制密码或 AccessKey Secret 后倒计时自动清空系统剪贴板，防止误粘贴泄露
                   </div>
                 </div>
                 <select
                   v-model.number="store.userSettings.vaultClipboardClearSeconds"
                   aria-label="复制敏感密码后自动清理剪贴板时间"
-                  class="px-2.5 py-1.5 rounded-lg text-xs font-medium border outline-none cursor-pointer shrink-0"
+                  class="px-3 py-1.5 rounded-lg text-xs font-medium border outline-none cursor-pointer shrink-0 min-w-[175px]"
                   :class="
                     store.isDark
                       ? 'bg-obsidian-950 border-slate-700 text-slate-200'
