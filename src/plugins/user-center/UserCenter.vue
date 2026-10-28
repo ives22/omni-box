@@ -11,6 +11,7 @@ import {
   revealPathInFinder
 } from '@/bridge/backend'
 import IconRenderer from '@/components/IconRenderer.vue'
+import OmniBoxLogo from '@/components/OmniBoxLogo.vue'
 
 type TabKey =
   | 'account'
@@ -1092,11 +1093,7 @@ async function triggerWebdavSync() {
             "
           >
             <div class="flex items-center gap-3.5 min-w-0">
-              <div
-                class="flex items-center justify-center w-11 h-11 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white font-mono text-base font-bold shadow-sm shadow-indigo-500/20 shrink-0"
-              >
-                OB
-              </div>
+              <OmniBoxLogo :size="46" />
               <div class="min-w-0">
                 <div class="flex items-center gap-2">
                   <input

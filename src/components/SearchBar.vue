@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useLauncherStore } from '@/stores/launcher'
 import IconRenderer from './IconRenderer.vue'
 import AppIconBadge from './AppIconBadge.vue'
+import OmniBoxLogo from './OmniBoxLogo.vue'
 
 const store = useLauncherStore()
 const mainInputRef = ref<HTMLInputElement | null>(null)
@@ -681,40 +682,15 @@ defineExpose({
           type="button"
           title="个人中心与设置 (⌘,)"
           aria-label="打开个人中心"
-          class="group relative flex items-center justify-center w-8 h-8 rounded-full cursor-pointer transition-all duration-150 hover:scale-105 active:scale-95 shadow-sm outline-none shrink-0"
+          class="group relative flex items-center justify-center w-8 h-8 rounded-xl cursor-pointer transition-all duration-150 hover:scale-105 active:scale-95 outline-none shrink-0"
           :class="[
             store.activePluginId === 'user-center'
-              ? 'ring-2 ring-indigo-500/80 bg-gradient-to-b from-indigo-500/20 to-slate-300 dark:from-indigo-500/30 dark:to-slate-800'
-              : store.isDark
-                ? 'bg-gradient-to-b from-slate-600 via-slate-700 to-slate-800 ring-1 ring-white/20'
-                : 'bg-gradient-to-b from-slate-200 via-slate-300 to-slate-400/90 ring-1 ring-slate-300/80'
+              ? 'ring-2 ring-indigo-500/90 shadow-md shadow-indigo-500/20'
+              : 'hover:ring-2 hover:ring-indigo-500/40'
           ]"
           @click="toggleUserCenter"
         >
-          <svg viewBox="0 0 40 40" class="w-7 h-7">
-            <defs>
-              <linearGradient id="helmetGradUnified" x1="0%" y1="0%" x2="0%" y2="100%">
-                <stop offset="0%" stop-color="#FFFFFF" />
-                <stop offset="100%" stop-color="#CBD5E1" />
-              </linearGradient>
-              <linearGradient id="visorGradUnified" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stop-color="#0F172A" />
-                <stop offset="100%" stop-color="#1E293B" />
-              </linearGradient>
-            </defs>
-            <path d="M8 36 C8 29, 32 29, 32 36" fill="url(#helmetGradUnified)" opacity="0.9" />
-            <rect x="9" y="8" width="22" height="20" rx="10" fill="url(#helmetGradUnified)" />
-            <rect x="6.5" y="15" width="3" height="6" rx="1.5" fill="#94A3B8" />
-            <rect x="30.5" y="15" width="3" height="6" rx="1.5" fill="#94A3B8" />
-            <rect x="12" y="13.5" width="16" height="8.5" rx="4.25" fill="url(#visorGradUnified)" />
-            <path
-              d="M16.5 16.5 L19 18.5 L16.5 19.5 M23.5 16.5 L21 18.5 L23.5 19.5 M20 16 L20 20"
-              stroke="#6366F1"
-              stroke-width="1.6"
-              stroke-linecap="round"
-              fill="none"
-            />
-          </svg>
+          <OmniBoxLogo :size="32" />
         </button>
       </template>
     </div>

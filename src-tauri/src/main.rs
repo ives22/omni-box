@@ -222,6 +222,64 @@ fn ensure_macos_accessory_policy() {
     }
 }
 
+/// Inject the custom HyperCube application icon into NSApplication at runtime
+/// so macOS Dock, Cmd+Tab App Switcher and Activity Monitor always display our logo even in `tauri dev` mode.
+#[cfg(target_os = "macos")]
+fn apply_macos_application_icon() {
+    use std::ffi::c_void;
+    static ICON_BYTES: &[u8] = include_bytes!("../icons/icon.png");
+    unsafe {
+        let send_id: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        let send_data: unsafe extern "C" fn(
+            *mut c_void,
+            *mut c_void,
+            *const u8,
+            usize,
+        ) -> *mut c_void = std::mem::transmute(objc_msgSend as *const ());
+        let send_init_data: unsafe extern "C" fn(
+            *mut c_void,
+            *mut c_void,
+            *mut c_void,
+        ) -> *mut c_void = std::mem::transmute(objc_msgSend as *const ());
+        let send_void_id: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
+            std::mem::transmute(objc_msgSend as *const ());
+
+        let cls_data = objc_getClass(b"NSData\0".as_ptr() as _);
+        let cls_img = objc_getClass(b"NSImage\0".as_ptr() as _);
+        let cls_app = objc_getClass(b"NSApplication\0".as_ptr() as _);
+        if cls_data.is_null() || cls_img.is_null() || cls_app.is_null() {
+            return;
+        }
+
+        let sel_data_with_bytes = sel_registerName(b"dataWithBytes:length:\0".as_ptr() as _);
+        let ns_data = send_data(
+            cls_data,
+            sel_data_with_bytes,
+            ICON_BYTES.as_ptr(),
+            ICON_BYTES.len(),
+        );
+        if ns_data.is_null() {
+            return;
+        }
+
+        let sel_alloc = sel_registerName(b"alloc\0".as_ptr() as _);
+        let sel_init_with_data = sel_registerName(b"initWithData:\0".as_ptr() as _);
+        let img_alloc = send_id(cls_img, sel_alloc);
+        let ns_img = send_init_data(img_alloc, sel_init_with_data, ns_data);
+        if ns_img.is_null() {
+            return;
+        }
+
+        let sel_shared = sel_registerName(b"sharedApplication\0".as_ptr() as _);
+        let ns_app = send_id(cls_app, sel_shared);
+        if !ns_app.is_null() {
+            let sel_set_icon = sel_registerName(b"setApplicationIconImage:\0".as_ptr() as _);
+            send_void_id(ns_app, sel_set_icon, ns_img);
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn set_macos_regular_policy_and_activate() {
     use std::ffi::c_void;
@@ -245,6 +303,7 @@ fn set_macos_regular_policy_and_activate() {
                 let sel_set_policy = sel_registerName(b"setActivationPolicy:\0".as_ptr() as _);
                 let _ = send_bool_isize(ns_app, sel_set_policy, 0);
             }
+            apply_macos_application_icon();
             let sel_activate = sel_registerName(b"activateIgnoringOtherApps:\0".as_ptr() as _);
             send_void_bool(ns_app, sel_activate, 1);
         }
@@ -2065,6 +2124,7 @@ fn main() {
             {
                 let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 ensure_macos_accessory_policy();
+                apply_macos_application_icon();
                 if let Some(win) = app.get_webview_window("main") {
                     if let Ok(ns_win) = win.ns_window() {
                         configure_nswindow_overlay_props(ns_win);
@@ -2110,6 +2170,7 @@ fn main() {
             tauri::RunEvent::Ready => {
                 let _ = app_handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
                 ensure_macos_accessory_policy();
+                apply_macos_application_icon();
                 if let Some(win) = app_handle.get_webview_window("main") {
                     if let Ok(ns_win) = win.ns_window() {
                         configure_nswindow_overlay_props(ns_win);

@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#161D38"/>
+      <stop offset="45%" stop-color="#0D1224"/>
+      <stop offset="100%" stop-color="#1E153A"/>
+    </linearGradient>
+    <radialGradient id="glow1" cx="50%" cy="42%" r="55%">
+      <stop offset="0%" stop-color="#6366F1" stop-opacity="0.48"/>
+      <stop offset="55%" stop-color="#06B6D4" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="rim1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#A5B4FC" stop-opacity="0.65"/>
+      <stop offset="50%" stop-color="#6366F1" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#C084FC" stop-opacity="0.45"/>
+    </linearGradient>
+    <linearGradient id="topFace" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67E8F9"/>
+      <stop offset="50%" stop-color="#60A5FA"/>
+      <stop offset="100%" stop-color="#818CF8"/>
+    </linearGradient>
+    <linearGradient id="leftFace" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4F46E5"/>
+      <stop offset="100%" stop-color="#1E1B4B"/>
+    </linearGradient>
+    <linearGradient id="rightFace" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7C3AED"/>
+      <stop offset="100%" stop-color="#3B0764"/>
+    </linearGradient>
+    <filter id="dropShadow1" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="28" stdDeviation="32" flood-color="#020617" flood-opacity="0.75"/>
+    </filter>
+    <filter id="neonGlow1" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="64" y="64" width="896" height="896" rx="205" fill="url(#bg1)"/>
+  <rect x="64" y="64" width="896" height="896" rx="205" fill="url(#glow1)"/>
+  <rect x="68" y="68" width="888" height="888" rx="201" fill="none" stroke="url(#rim1)" stroke-width="8"/>
+
+  <circle cx="512" cy="512" r="330" fill="none" stroke="#6366F1" stroke-opacity="0.14" stroke-width="3" stroke-dasharray="10 14"/>
+  <circle cx="512" cy="512" r="250" fill="none" stroke="#38BDF8" stroke-opacity="0.12" stroke-width="2"/>
+
+  <g filter="url(#dropShadow1)">
+    <polygon points="512,210 772,360 772,660 512,810 252,660 252,360" fill="none" stroke="#818CF8" stroke-width="6" stroke-opacity="0.35" stroke-linejoin="round"/>
+    <polygon points="512,220 760,364 512,508 264,364" fill="url(#topFace)"/>
+    <polygon points="512,272 670,364 512,456 354,364" fill="#0F172A" fill-opacity="0.72" stroke="#BAE6FD" stroke-width="4" stroke-opacity="0.6"/>
+    <circle cx="512" cy="364" r="32" fill="#38BDF8" filter="url(#neonGlow1)"/>
+
+    <polygon points="264,364 512,508 512,796 264,652" fill="url(#leftFace)"/>
+    <polygon points="512,508 760,364 760,652 512,796" fill="url(#rightFace)"/>
+
+    <polyline points="264,364 512,508 760,364" fill="none" stroke="#E0F2FE" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" opacity="0.9"/>
+    <line x1="512" y1="508" x2="512" y2="796" stroke="#C7D2FE" stroke-width="7" stroke-linecap="round" opacity="0.85"/>
+    <polygon points="512,220 760,364 760,652 512,796 264,652 264,364" fill="none" stroke="#A5B4FC" stroke-width="5" stroke-opacity="0.5" stroke-linejoin="round"/>
+
+    <g filter="url(#neonGlow1)">
+      <path d="M 335 495 L 395 565 L 335 595" fill="none" stroke="#38BDF8" stroke-width="20" stroke-linecap="round" stroke-linejoin="round"/>
+      <line x1="415" y1="622" x2="468" y2="652" stroke="#F8FAFC" stroke-width="20" stroke-linecap="round"/>
+    </g>
+
+    <g opacity="0.92">
+      <polygon points="562,535 632,494 632,564 562,605" fill="#C084FC" fill-opacity="0.35" stroke="#E9D5FF" stroke-width="4"/>
+      <polygon points="652,482 722,441 722,511 652,552" fill="#38BDF8" fill-opacity="0.45" stroke="#BAE6FD" stroke-width="4"/>
+      <polygon points="562,628 632,587 632,657 562,698" fill="#A855F7" fill-opacity="0.3" stroke="#D8B4FE" stroke-width="4"/>
+      <polygon points="652,575 722,534 722,604 652,645" fill="#818CF8" fill-opacity="0.35" stroke="#C7D2FE" stroke-width="4"/>
+    </g>
+  </g>
+
+  <path d="M 770 205 Q 770 255 820 255 Q 770 255 770 305 Q 770 255 720 255 Q 770 255 770 205 Z" fill="#67E8F9" filter="url(#neonGlow1)"/>
+</svg>
