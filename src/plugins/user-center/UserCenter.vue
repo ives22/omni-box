@@ -12,6 +12,7 @@ import {
 } from '@/bridge/backend'
 import IconRenderer from '@/components/IconRenderer.vue'
 import OmniBoxLogo from '@/components/OmniBoxLogo.vue'
+import HelpTooltip from '@/components/HelpTooltip.vue'
 
 type TabKey =
   | 'account'
@@ -586,12 +587,11 @@ async function triggerWebdavSync() {
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-1.5 text-[13px] font-medium">
                   <span>点击外部自动隐藏窗口</span>
-                  <span
-                    title="当鼠标点击搜索框窗口外部区域时，自动收起并隐藏搜索窗口"
-                    class="text-slate-400 cursor-help"
-                  >
-                    <IconRenderer name="HelpCircle" :size="13" />
-                  </span>
+                  <HelpTooltip
+                    title="失去焦点自动收起主窗口"
+                    content="开启后，当鼠标点击搜索框窗口外部区域或切换到其他应用时，主窗口将自动收起隐藏，保持桌面清爽。"
+                    tip="注：通过 ⌘+D 分离出的独立工具窗口不受此限制，可常驻桌面。"
+                  />
                 </div>
                 <label class="relative inline-flex items-center cursor-pointer">
                   <input
@@ -610,12 +610,11 @@ async function triggerWebdavSync() {
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-1.5 text-[13px] font-medium">
                   <span>剪贴板 JSON / 算式智能感知</span>
-                  <span
-                    title="当输入或粘贴合法的 JSON 字符串或数学算式时，自动在第一行提供直达处理建议"
-                    class="text-slate-400 cursor-help"
-                  >
-                    <IconRenderer name="HelpCircle" :size="13" />
-                  </span>
+                  <HelpTooltip
+                    title="输入与粘贴内容意图识别"
+                    content="当在搜索框输入或粘贴合法的 JSON 字符串、数学算式（如 (128+56)*0.85）或以 ? / ai 开头的问题时，第一行会自动提供「JSON 格式化」、「实时计算结果」或「AI 问答」直达入口。"
+                    tip="示例：复制一段 JSON 后呼出即可一键进入 JSON 助手格式化。"
+                  />
                 </div>
                 <label class="relative inline-flex items-center cursor-pointer">
                   <input
@@ -704,12 +703,11 @@ async function triggerWebdavSync() {
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-1.5 text-[13px] font-medium">
                   <span>英文快速翻译</span>
-                  <span
-                    title="选中英文单词或段落呼出超级面板时，自动展示中文释义"
-                    class="text-slate-400 cursor-help"
-                  >
-                    <IconRenderer name="HelpCircle" :size="13" />
-                  </span>
+                  <HelpTooltip
+                    title="超级面板选中文本英汉速译"
+                    content="复制或选中英文单词、短语或代码驼峰变量名后呼出超级面板，面板顶部会自动展示中文释义，支持一键复制译文。"
+                    tip="支持常见计算机术语、四六级词汇及短句离线/在线速译。"
+                  />
                 </div>
                 <label class="relative inline-flex items-center cursor-pointer">
                   <input
@@ -728,12 +726,11 @@ async function triggerWebdavSync() {
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-1.5 text-[13px] font-medium">
                   <span>自动固定“功能”</span>
-                  <span
-                    title="根据使用频率自动将高频使用的插件固定在面板首屏"
-                    class="text-slate-400 cursor-help"
-                  >
-                    <IconRenderer name="HelpCircle" :size="13" />
-                  </span>
+                  <HelpTooltip
+                    title="Frecency 高频功能智能排序"
+                    content="基于您的历史调用次数与最近使用时间（Frecency 算法），自动将高频使用的内置插件与本机应用动态固定在主搜索框首屏及超级面板前排。"
+                    tip="可在「个人中心 -> 我的账号」查看实时频率权重排行。"
+                  />
                 </div>
                 <label class="relative inline-flex items-center cursor-pointer">
                   <input
@@ -866,7 +863,13 @@ async function triggerWebdavSync() {
 
               <!-- 搜索框显示「最近使用」 -->
               <div class="flex items-center justify-between">
-                <div class="text-[13px] font-medium">搜索框显示「最近使用」</div>
+                <div class="flex items-center gap-1.5 text-[13px] font-medium">
+                  <span>搜索框显示「最近使用」</span>
+                  <HelpTooltip
+                    title="主搜索框空状态展示常用面板"
+                    content="开启后，呼出搜索框且未输入关键词时，下方默认展示您最近与最常使用的插件及本机应用；关闭后仅保留极简的单行搜索框（54px 高）。"
+                  />
+                </div>
                 <label class="relative inline-flex items-center cursor-pointer">
                   <input
                     v-model="store.userSettings.showRecentInSearch"
@@ -882,7 +885,13 @@ async function triggerWebdavSync() {
 
               <!-- 搜索框匹配显示「应用推荐」 -->
               <div class="flex items-center justify-between">
-                <div class="text-[13px] font-medium">搜索框匹配显示「应用推荐」</div>
+                <div class="flex items-center gap-1.5 text-[13px] font-medium">
+                  <span>搜索框匹配显示「应用推荐」</span>
+                  <HelpTooltip
+                    title="输入关键词联动检索本机 App"
+                    content="开启后，在搜索框输入关键词时同步匹配本机安装的 macOS 应用（支持英文缩写、汉语全拼及拼音首字母，如输入 wx 匹配微信、zd 匹配终端）。"
+                  />
+                </div>
                 <label class="relative inline-flex items-center cursor-pointer">
                   <input
                     v-model="store.userSettings.showAppRecommendation"
@@ -900,12 +909,11 @@ async function triggerWebdavSync() {
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-1.5 text-[13px] font-medium">
                   <span>分离为独立窗口快捷键</span>
-                  <span
-                    title="点击右侧按钮可自定义快捷键；按下即可将当前窗口切换为独立 macOS 窗口"
-                    class="text-slate-400 cursor-help"
-                  >
-                    <IconRenderer name="HelpCircle" :size="13" />
-                  </span>
+                  <HelpTooltip
+                    title="将工具剥离为独立多任务窗口"
+                    content="在任意内置插件（如密码本、计算稿纸、JSON 助手）内按下该快捷键，即可将其分离为带 macOS 红黄绿控制灯的独立窗口常驻桌面，主搜索框可继续搜索其他功能。"
+                    tip="默认快捷键：Command + D（支持点击右侧按钮自定义录制）。"
+                  />
                 </div>
                 <button
                   type="button"
@@ -932,7 +940,13 @@ async function triggerWebdavSync() {
 
               <!-- 搜索框模式 -->
               <div class="flex items-center justify-between">
-                <div class="text-[13px] font-medium">搜索框模式</div>
+                <div class="flex items-center gap-1.5 text-[13px] font-medium">
+                  <span>搜索框模式</span>
+                  <HelpTooltip
+                    title="首屏「最近使用」展示布局切换"
+                    content="聚合模式以高密度图标网格横向排列常用功能（支持展开查看全部）；列表模式以纵向详情列表展示功能名称、类别与快捷键提示。"
+                  />
+                </div>
                 <select
                   v-model="store.userSettings.searchBarMode"
                   aria-label="搜索框模式"
@@ -953,12 +967,11 @@ async function triggerWebdavSync() {
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-1.5 text-[13px] font-medium">
                   <span>自动粘贴搜索框</span>
-                  <span
-                    title="复制文本后在指定时间内呼出搜索框，自动将剪贴板内容填入或感知"
-                    class="text-slate-400 cursor-help"
-                  >
-                    <IconRenderer name="HelpCircle" :size="13" />
-                  </span>
+                  <HelpTooltip
+                    title="近期复制文本自动填入搜索框"
+                    content="当您在其他应用中刚复制了文本（⌘+C），并在设定时间窗口（如 3 秒 / 5 秒内）呼出 OmniBox 时，自动将剪贴板文本带入搜索框并触发匹配。"
+                    tip="若刚复制的是密码本敏感凭据，可设为「不自动粘贴」以防回显。"
+                  />
                 </div>
                 <select
                   v-model="store.userSettings.autoPasteWindow"
@@ -982,12 +995,10 @@ async function triggerWebdavSync() {
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-1.5 text-[13px] font-medium">
                   <span>自动清空搜索框</span>
-                  <span
-                    title="每次重新通过快捷键呼出工具窗口时，自动清空上一次的搜索关键词"
-                    class="text-slate-400 cursor-help"
-                  >
-                    <IconRenderer name="HelpCircle" :size="13" />
-                  </span>
+                  <HelpTooltip
+                    title="离开后自动重置搜索关键词"
+                    content="控制隐藏搜索框后再次呼出时是否保留上一次输入的搜索词。设为「每次呼出立即清空」可确保每次唤醒都是干净的初始状态；设为 1～5 分钟则在短时间切出再回来时保留搜索上下文。"
+                  />
                 </div>
                 <select
                   v-model="store.userSettings.autoClearWindow"
@@ -1011,12 +1022,11 @@ async function triggerWebdavSync() {
               <div class="flex items-center justify-between">
                 <div class="flex items-center gap-1.5 text-[13px] font-medium">
                   <span>空格键执行打开</span>
-                  <span
-                    title="开启后，在搜索结果列表中按空格键也可直接打开当前高亮的应用或插件"
-                    class="text-slate-400 cursor-help"
-                  >
-                    <IconRenderer name="HelpCircle" :size="13" />
-                  </span>
+                  <HelpTooltip
+                    title="搜索结果列表空格键快捷启动"
+                    content="开启后，在搜索结果列表中除了按 Enter 回车键外，直接敲击 Space（空格键）也可立即启动当前高亮选中的应用或插件。"
+                    tip="注：当输入带有前缀参数（如 ai 提问或 f 搜文件）时，空格键仍正常输入空格。"
+                  />
                 </div>
                 <label class="relative inline-flex items-center cursor-pointer">
                   <input
