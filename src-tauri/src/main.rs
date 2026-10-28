@@ -1818,17 +1818,26 @@ fn execute_system_command(cmd_id: String) -> Result<String, String> {
                 Ok("已切换访达隐藏文件显示状态".to_string())
             }
             "sys:copy-local-ip" => {
-                let out = Command::new("ipconfig")
-                    .args(["getifaddr", "en0"])
-                    .output()
-                    .map_err(|e| e.to_string())?;
-                let ip = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                let resolved = if ip.is_empty() {
-                    "127.0.0.1".to_string()
-                } else {
-                    ip
-                };
-                Ok(resolved)
+                // Fast & interface-agnostic local IPv4 detection via UDP routing table lookup
+                if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
+                    if sock.connect("8.8.8.8:80").is_ok() {
+                        if let Ok(local_addr) = sock.local_addr() {
+                            let ip_str = local_addr.ip().to_string();
+                            if !ip_str.is_empty() && ip_str != "0.0.0.0" && ip_str != "127.0.0.1" {
+                                return Ok(ip_str);
+                            }
+                        }
+                    }
+                }
+                for iface in ["en0", "en1", "en2", "en3"] {
+                    if let Ok(out) = Command::new("ipconfig").args(["getifaddr", iface]).output() {
+                        let ip = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                        if !ip.is_empty() {
+                            return Ok(ip);
+                        }
+                    }
+                }
+                Ok("127.0.0.1".to_string())
             }
             _ => Err(format!("未知系统命令: {}", cmd_id)),
         }

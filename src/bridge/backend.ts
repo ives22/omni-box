@@ -264,10 +264,10 @@ export const SYSTEM_COMMAND_ITEMS: Omit<SearchResultItem, 'score' | 'match_type'
   {
     id: 'cmd:copy-local-ip',
     title: '查询并复制本机局域网 IP (Local IP)',
-    subtitle: '读取 macOS en0 网卡 IPv4 地址并自动复制到剪贴板',
+    subtitle: '实时获取 macOS 当前局域网 IPv4 地址，按 Enter 立即复制到剪贴板',
     category: 'command',
     icon: 'Globe',
-    keywords: ['ip', 'network', '局域网', '内网ip', 'benjiip'],
+    keywords: ['ip', 'localip', 'ifconfig', 'network', '局域网', '内网ip', '本机ip', 'benjiip'],
     action_payload: 'sys:copy-local-ip',
     badge: '系统指令'
   },
@@ -277,7 +277,7 @@ export const SYSTEM_COMMAND_ITEMS: Omit<SearchResultItem, 'score' | 'match_type'
     subtitle: '调用 AppleScript 立即切换 macOS 全局 Dark / Light 模式',
     category: 'command',
     icon: 'Moon',
-    keywords: ['dark', 'light', 'theme', '深色模式', '暗黑模式', '外观'],
+    keywords: ['dark', 'light', 'theme', '深色模式', '暗黑模式', '外观', 'ssms'],
     action_payload: 'sys:toggle-dark-mode',
     badge: '系统指令'
   },
@@ -287,7 +287,7 @@ export const SYSTEM_COMMAND_ITEMS: Omit<SearchResultItem, 'score' | 'match_type'
     subtitle: '调用 Finder 清空废纸篓释放磁盘空间',
     category: 'command',
     icon: 'Trash2',
-    keywords: ['trash', 'clean', '清空废纸篓', '垃圾桶', 'qkfzl'],
+    keywords: ['trash', 'clean', 'empty', '清空废纸篓', '垃圾桶', 'qkfzl'],
     action_payload: 'sys:empty-trash',
     badge: '系统指令'
   },
@@ -297,8 +297,18 @@ export const SYSTEM_COMMAND_ITEMS: Omit<SearchResultItem, 'score' | 'match_type'
     subtitle: '立即休眠显示器并进入系统锁屏状态',
     category: 'command',
     icon: 'Lock',
-    keywords: ['lock', 'sleep', '锁屏', '休眠', 'sp'],
+    keywords: ['lock', 'sleep', 'screen', '锁屏', '休眠', 'sp'],
     action_payload: 'sys:lock-screen',
+    badge: '系统指令'
+  },
+  {
+    id: 'cmd:show-hidden-files',
+    title: '显示隐藏文件 (Show Hidden Files)',
+    subtitle: '在访达 (Finder) 中开启显示以点开头的隐藏文件与目录',
+    category: 'command',
+    icon: 'FolderGit2',
+    keywords: ['hidden', 'files', 'dotfiles', '隐藏文件', '显示隐藏文件', 'ycwj'],
+    action_payload: 'sys:show-hidden-files',
     badge: '系统指令'
   }
 ]
@@ -433,13 +443,21 @@ export async function runSystemCommand(cmdId: string): Promise<string> {
   return `已执行系统指令 (${cmdId})`
 }
 
-// Pre-compute Pinyin full & initials for sub-millisecond matching
+// Pre-compute Pinyin full & initials for Chinese characters in sub-millisecond matching
 const pinyinCache = new Map<string, { full: string; initials: string }>()
 function getPinyinIndex(text: string): { full: string; initials: string } {
   const cached = pinyinCache.get(text)
   if (cached) return cached
-  const full = pinyin(text, { toneType: 'none', type: 'array' }).join('').toLowerCase()
-  const initials = pinyin(text, { pattern: 'first', toneType: 'none', type: 'array' }).join('').toLowerCase()
+  const zhOnly = text.replace(/[^\u4e00-\u9fa5]/g, '')
+  if (!zhOnly) {
+    const empty = { full: '', initials: '' }
+    pinyinCache.set(text, empty)
+    return empty
+  }
+  const full = pinyin(zhOnly, { toneType: 'none', type: 'array' }).join('').toLowerCase()
+  const initials = pinyin(zhOnly, { pattern: 'first', toneType: 'none', type: 'array' })
+    .join('')
+    .toLowerCase()
   const entry = { full, initials }
   pinyinCache.set(text, entry)
   return entry
@@ -680,7 +698,10 @@ const QUICK_EN_ZH_DICT: Record<string, string> = {
   decryption: '解密'
 }
 
-export async function quickTranslateEnglish(input: string): Promise<string | null> {
+export async function quickTranslateEnglish(
+  input: string,
+  allowNetwork = false
+): Promise<string | null> {
   const cleaned = input.trim()
   if (!cleaned || cleaned.length < 2 || cleaned.length > 160) return null
   // Only trigger for pure English words/sentences (letters, spaces, basic punctuation)
@@ -691,9 +712,13 @@ export async function quickTranslateEnglish(input: string): Promise<string | nul
     return QUICK_EN_ZH_DICT[lower]
   }
 
+  if (!allowNetwork) {
+    return null
+  }
+
   try {
     const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 1500)
+    const timer = setTimeout(() => controller.abort(), 600)
     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=zh-CN&dt=t&q=${encodeURIComponent(
       cleaned
     )}`
@@ -792,10 +817,10 @@ export async function queryLauncherItems(
 
   const results: SearchResultItem[] = []
   for (const item of allItems) {
-    const frecencyBonus = (frecency[item.id] || 0) * 25
     const customAliases = itemAliasesMap[item.id] || []
 
     if (!q) {
+      const frecencyBonus = (frecency[item.id] || 0) * 35
       const base =
         item.category === 'plugin' ? 500 : item.category === 'app' ? 240 : 120
       results.push({
@@ -809,88 +834,107 @@ export async function queryLauncherItems(
     let bestScore: number | null = null
     let matchType = 'fuzzy'
 
-    // 0. Highest priority: Custom Alias Match
-    if (customAliases.includes(q)) {
-      bestScore = 1800
-      matchType = `别名直达 (${q})`
-    } else if (customAliases.some((a) => a.startsWith(q))) {
-      bestScore = 1350
-      matchType = '别名匹配'
-    }
-
-    const titleLower = item.title.toLowerCase()
-    const py = getPinyinIndex(`${item.title} ${item.keywords.join(' ')}`)
-
-    if (bestScore === null) {
-      if (titleLower === q) {
-        bestScore = 1200
-        matchType = '精准匹配'
-      } else if (titleLower.startsWith(q)) {
-        bestScore = 950
-        matchType = '前缀匹配'
-      } else if (titleLower.includes(q)) {
-        bestScore = 780
-        matchType = '包含匹配'
+    const updateBest = (score: number, type: string) => {
+      if (bestScore === null || score > bestScore) {
+        bestScore = score
+        matchType = type
       }
     }
 
-    if (bestScore === null) {
-      for (const kw of item.keywords) {
-        const kwL = kw.toLowerCase()
-        if (kwL === q) {
-          bestScore = 1100
-          matchType = '指令直达'
-          break
-        } else if (kwL.startsWith(q)) {
-          bestScore = 880
-          matchType = '指令前缀'
-          break
-        } else if (kwL.includes(q)) {
-          bestScore = 700
-          matchType = '关键词'
+    // 1. Highest priority: Custom Alias Match
+    if (customAliases.includes(q)) {
+      updateBest(3000, `别名直达 (${q})`)
+    } else if (customAliases.some((a) => a.startsWith(q))) {
+      updateBest(2000, '别名匹配')
+    }
+
+    const titleLower = item.title.toLowerCase()
+    const py = getPinyinIndex(item.title)
+
+    // 2. Title Direct Match
+    if (titleLower === q) {
+      updateBest(2500, '精准匹配')
+    } else if (titleLower.startsWith(q)) {
+      updateBest(1750, '前缀匹配')
+    } else if (titleLower.includes(q)) {
+      // Boost if matched at a word boundary (e.g. "(Local IP)" or "iPhone")
+      const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      const wordStartRe = new RegExp(`(^|[\\s(\\[/_-])${escaped}`, 'i')
+      if (wordStartRe.test(item.title)) {
+        updateBest(1350, '词首匹配')
+      } else {
+        updateBest(1050, '包含匹配')
+      }
+    }
+
+    // 3. Keywords Direct / Prefix / Substring Match (Always evaluated so exact keyword `ip` wins!)
+    for (const kw of item.keywords) {
+      const kwL = kw.toLowerCase()
+      if (kwL === q) {
+        updateBest(2400, '指令直达')
+      } else if (kwL.startsWith(q)) {
+        updateBest(1600, '指令前缀')
+      } else if (q.length >= 2 && kwL.includes(q)) {
+        updateBest(980, '关键词')
+      }
+    }
+
+    // 4. Chinese Pinyin Initials & Full Pinyin Match (Pure Chinese characters only)
+    if (py.initials) {
+      if (py.initials === q) {
+        updateBest(2100, '首字母精准')
+      } else if (py.initials.startsWith(q)) {
+        updateBest(1500, '首字母前缀')
+      } else if (q.length >= 2 && py.initials.includes(q)) {
+        updateBest(1150, '拼音首字母')
+      } else if (q.length >= 3) {
+        const initSub = subsequenceScore(py.initials, q)
+        if (initSub !== null) {
+          updateBest(720 + initSub, '首字母简拼')
         }
       }
     }
 
-    // 5. Character / Chinese Subsequence Match on Title & Keywords (only when showAppRecommendation is enabled)
-    if (bestScore === null && showAppRecommendation) {
+    if (py.full && showAppRecommendation) {
+      if (py.full === q) {
+        updateBest(2050, '全拼精准')
+      } else if (py.full.startsWith(q)) {
+        updateBest(1400, '全拼前缀')
+      } else if (q.length >= 3 && py.full.includes(q)) {
+        updateBest(900, '全拼包含')
+      }
+    }
+
+    // 5. Subsequence Fuzzy Match (ONLY for longer queries >= 3 chars to avoid 2-letter noise like 'ip')
+    if (bestScore === null && showAppRecommendation && q.length >= 3) {
       const titleSubScore = subsequenceScore(titleLower, q)
       if (titleSubScore !== null) {
-        bestScore = 540 + titleSubScore
-        matchType = '智能推荐'
+        updateBest(540 + titleSubScore, '智能推荐')
       } else {
         for (const kw of item.keywords) {
           const kwSubScore = subsequenceScore(kw.toLowerCase(), q)
           if (kwSubScore !== null) {
-            bestScore = 510 + kwSubScore
-            matchType = '智能推荐'
+            updateBest(510 + kwSubScore, '智能推荐')
             break
           }
         }
       }
     }
 
-    if (bestScore === null) {
-      const initScore = subsequenceScore(py.initials, q)
-      if (initScore !== null) {
-        bestScore = 620 + initScore
-        matchType = '拼音首字母'
-      }
-    }
-
-    if (bestScore === null && showAppRecommendation) {
-      const fullScore = subsequenceScore(py.full, q)
-      if (fullScore !== null) {
-        bestScore = 490 + fullScore
-        matchType = '全拼推荐'
-      }
-    }
-
     if (bestScore !== null) {
-      const catBonus = item.category === 'plugin' ? 60 : item.category === 'app' ? 30 : 0
+      // Cap frecency bonus during active search so fuzzy/frequent apps never outrank exact keyword commands
+      const searchFrecencyBonus = Math.min(80, (frecency[item.id] || 0) * 8)
+      const catBonus =
+        item.category === 'command'
+          ? 45
+          : item.category === 'plugin'
+            ? 40
+            : item.category === 'app'
+              ? 25
+              : 0
       results.push({
         ...item,
-        score: bestScore + catBonus + frecencyBonus,
+        score: bestScore + catBonus + searchFrecencyBonus,
         match_type: matchType
       })
     }

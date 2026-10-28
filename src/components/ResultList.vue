@@ -97,8 +97,19 @@ function cleanTitle(title: string): string {
               应用推荐
             </span>
             <span
-              v-else-if="item.badge === '英汉速译' || item.badge === 'AI 助手'"
-              class="px-1.5 py-0.2 text-[10px] font-medium rounded bg-indigo-500/15 text-indigo-400 border border-indigo-500/30 shrink-0"
+              v-else-if="
+                item.badge === '系统指令' ||
+                item.badge === '指令直达' ||
+                item.badge === '算式直达' ||
+                item.badge === 'JSON 感知'
+              "
+              class="px-1.5 py-0.2 text-[10px] font-medium rounded bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 shrink-0"
+            >
+              {{ item.badge }}
+            </span>
+            <span
+              v-else-if="item.badge === '英汉速译' || item.badge === '快速翻译' || item.badge === 'AI 助手'"
+              class="px-1.5 py-0.2 text-[10px] font-medium rounded bg-indigo-500/15 text-indigo-500 dark:text-indigo-400 border border-indigo-500/30 shrink-0"
             >
               {{ item.badge }}
             </span>

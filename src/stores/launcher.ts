@@ -122,10 +122,22 @@ export const useLauncherStore = defineStore('launcher', () => {
   const systemApps = ref<SystemAppItem[]>([])
   const totpEntries = ref<TotpEntry[]>([])
   const totpLiveMap = ref<Record<string, { code: string; remaining: number }>>({})
+  const cachedLocalIp = ref<string>('')
   const externalPlugins = ref<ExternalUtoolsPlugin[]>([])
   const activeExternalPlugin = ref<ExternalUtoolsPlugin | null>(null)
   const userSettings = ref<UserSettings>({ ...DEFAULT_USER_SETTINGS })
   const usageStatsMap = ref<Record<string, number>>({})
+
+  async function refreshLocalIp() {
+    try {
+      const ip = await runSystemCommand('sys:copy-local-ip')
+      if (ip && ip.trim()) {
+        cachedLocalIp.value = ip.trim()
+      }
+    } catch {
+      // ignore
+    }
+  }
 
   function showToast(msg: string, type: 'success' | 'info' | 'warning' = 'success') {
     toastMessage.value = msg
@@ -205,7 +217,7 @@ export const useLauncherStore = defineStore('launcher', () => {
     superPanelClipboard.value = clean
     superPanelTranslation.value = null
     if (clean && userSettings.value.quickTranslate !== false) {
-      superPanelTranslation.value = await quickTranslateEnglish(clean)
+      superPanelTranslation.value = await quickTranslateEnglish(clean, true)
     }
   }
 
@@ -469,6 +481,23 @@ export const useLauncherStore = defineStore('launcher', () => {
       userSettings.value.maxResultsCount,
       userSettings.value.showAppRecommendation !== false
     )
+
+    // Enrich `cmd:copy-local-ip` with live local IPv4 address so typing `ip` shows the IP right in the row
+    for (const item of matched) {
+      if (item.id === 'cmd:copy-local-ip') {
+        if (!cachedLocalIp.value) {
+          refreshLocalIp().then(() => {
+            if (searchQuery.value.trim().toLowerCase().includes('ip')) {
+              runSearch()
+            }
+          })
+        } else {
+          item.title = `查询并复制本机局域网 IP · ${cachedLocalIp.value}`
+          item.subtitle = `当前局域网 IPv4 地址：${cachedLocalIp.value} （按 Enter 立即复制到剪贴板）`
+        }
+      }
+    }
+
     const finalResults: SearchResultItem[] = []
 
     const quickJson = tryDetectQuickJson(q)
@@ -477,9 +506,49 @@ export const useLauncherStore = defineStore('launcher', () => {
     const quickMath = tryEvalQuickMath(q)
     if (quickMath) finalResults.push(quickMath)
 
-    // Quick English -> Chinese Translation (when enabled in Super Panel / Preferences)
+    // Built-in instant geek commands: `uuid` / `guid` & `now`
+    const lowerTrimmed = trimmed.toLowerCase()
+    if (lowerTrimmed === 'uuid' || lowerTrimmed === 'guid') {
+      const uuidVal =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+              const r = (Math.random() * 16) | 0
+              const v = c === 'x' ? r : (r & 0x3) | 0x8
+              return v.toString(16)
+            })
+      finalResults.push({
+        id: 'quick:uuid',
+        title: `UUID v4: ${uuidVal}`,
+        subtitle: '已生成标准随机 UUID v4 — 按 Enter 立即复制到剪贴板',
+        category: 'command',
+        icon: 'KeyRound',
+        keywords: ['uuid', 'guid'],
+        action_payload: uuidVal,
+        score: 9995,
+        match_type: '快捷指令',
+        badge: '指令直达'
+      })
+    } else if (lowerTrimmed === 'now') {
+      const nowSec = Math.floor(Date.now() / 1000)
+      const nowStr = new Date().toLocaleString('zh-CN', { hour12: false })
+      finalResults.push({
+        id: 'quick:timestamp',
+        title: `当前时间戳：${nowSec} (${nowStr})`,
+        subtitle: '秒级 Unix 时间戳 — 按 Enter 立即复制到剪贴板',
+        category: 'command',
+        icon: 'Clock',
+        keywords: ['now', 'timestamp'],
+        action_payload: String(nowSec),
+        score: 9995,
+        match_type: '快捷指令',
+        badge: '指令直达'
+      })
+    }
+
+    // Quick English -> Chinese Translation (Pure offline dictionary in search bar so it NEVER blocks typing)
     if (userSettings.value.quickTranslate !== false && trimmed.length >= 2) {
-      const translated = await quickTranslateEnglish(trimmed)
+      const translated = await quickTranslateEnglish(trimmed, false)
       if (seq !== currentSearchSeq) return
       if (translated) {
         finalResults.push({
@@ -545,10 +614,14 @@ export const useLauncherStore = defineStore('launcher', () => {
       return
     }
 
-    if (item.id === 'quick:math' || item.id === 'quick:translate') {
+    if (
+      item.id === 'quick:math' ||
+      item.id === 'quick:translate' ||
+      item.id === 'quick:uuid' ||
+      item.id === 'quick:timestamp'
+    ) {
       await navigator.clipboard.writeText(item.action_payload)
-      searchQuery.value = ''
-      await hideAppWindow()
+      showToast(`已复制到剪贴板：${item.action_payload}`)
       return
     }
 
@@ -574,8 +647,9 @@ export const useLauncherStore = defineStore('launcher', () => {
       try {
         const msg = await runSystemCommand(item.action_payload)
         if (item.action_payload === 'sys:copy-local-ip') {
-          await navigator.clipboard.writeText(msg)
-          showToast(`已复制本机局域网 IP：${msg}`)
+          cachedLocalIp.value = msg.trim()
+          await navigator.clipboard.writeText(msg.trim())
+          showToast(`已复制本机局域网 IP：${msg.trim()}`)
         } else {
           showToast(msg)
         }
@@ -878,6 +952,7 @@ export const useLauncherStore = defineStore('launcher', () => {
     }
 
     systemApps.value = await fetchSystemApps()
+    refreshLocalIp()
     await refreshTotpCodes()
     await runSearch()
 
