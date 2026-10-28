@@ -1038,3 +1038,9 @@ export const useLauncherStore = defineStore('launcher', () => {
     initStore
   }
 })
+
+if ((import.meta as any).hot) {
+  ;(import.meta as any).hot.accept(() => {
+    window.location.reload()
+  })
+}

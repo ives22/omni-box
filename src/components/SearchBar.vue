@@ -386,6 +386,7 @@ defineExpose({
           aria-label="全局命令搜索框"
           class="flex-1 h-full bg-transparent outline-none placeholder:text-slate-400/90 dark:placeholder:text-slate-500"
           :class="showTrafficLights ? 'text-[13.5px]' : 'text-[15px]'"
+          @input="(e) => (store.searchQuery = (e.target as HTMLInputElement).value)"
           @keydown="handleKeyDown"
         />
 

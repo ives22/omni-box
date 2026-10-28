@@ -2004,12 +2004,13 @@ async function triggerWebdavSync() {
               <div
                 v-for="cmd in SYSTEM_COMMAND_ITEMS"
                 :key="cmd.id"
-                class="flex items-center justify-between p-3 rounded-xl border"
+                class="flex items-center justify-between p-3 rounded-xl border cursor-pointer transition-all"
                 :class="
                   store.isDark
-                    ? 'bg-obsidian-900/70 border-slate-800'
-                    : 'bg-white border-slate-200/80 shadow-[0_1px_2px_rgba(15,23,42,0.02)]'
+                    ? 'bg-obsidian-900/70 border-slate-800 hover:border-indigo-500/50'
+                    : 'bg-white border-slate-200/80 hover:border-indigo-300 shadow-[0_1px_2px_rgba(15,23,42,0.02)]'
                 "
+                @click="store.executeItem({ ...cmd, score: 1000, match_type: 'manual' })"
               >
                 <div class="flex items-center gap-2.5 min-w-0 pr-2">
                   <div
@@ -2029,6 +2030,7 @@ async function triggerWebdavSync() {
                     </div>
                   </div>
                 </div>
+                <IconRenderer name="ChevronRight" :size="14" class-name="text-slate-400 shrink-0" />
               </div>
             </div>
           </div>
