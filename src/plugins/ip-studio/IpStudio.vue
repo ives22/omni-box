@@ -141,6 +141,18 @@ const cidrIpInput = ref('192.168.1.100')
 const cidrPrefix = ref<number>(24)
 const splitTargetPrefix = ref<number>(26)
 const testIpInCidr = ref('')
+const selectedCidrPreset = ref('')
+
+function handlePresetSelectChange(e: Event) {
+  const val = (e.target as HTMLSelectElement).value
+  if (!val) return
+  if (val === 'local' && primaryInterfaceObj.value) {
+    sendInterfaceToCidr(primaryInterfaceObj.value.ipv4, primaryInterfaceObj.value.cidr_prefix)
+  } else {
+    applyExternalQuery(val)
+  }
+  selectedCidrPreset.value = ''
+}
 
 const quickPrefixPresets = [
   { prefix: 8, label: '/8', desc: 'A类' },
@@ -275,7 +287,7 @@ const cidrAnalysis = computed(() => {
     wildcardMask: u32ToIpv4(wildcardU32),
     firstHostIp,
     lastHostIp,
-    hostRange: `${firstHostIp} - ${lastHostIp}`,
+    hostRange: `${firstHostIp} ~ ${lastHostIp}`,
     usableHosts: usableCount.toLocaleString('en-US'),
     totalAddresses: totalAddresses.toLocaleString('en-US'),
     octets,
@@ -424,20 +436,23 @@ onMounted(() => {
     :class="store.isDark ? 'bg-[#0E131F] text-slate-100' : 'bg-[#F8FAFC] text-slate-800'"
   >
     <!-- ===================================================================== -->
-    <!-- Top Segmented Navigation Bar                                          -->
+    <!-- Top Segmented Navigation Bar (Fixed Height, Zero Layout Shift)        -->
     <!-- ===================================================================== -->
     <div
-      class="flex items-center justify-between px-5 py-2.5 border-b shrink-0"
+      class="flex items-center justify-between h-[48px] px-5 border-b shrink-0 gap-3"
       :class="
         store.isDark
           ? 'bg-[#0A0E17]/90 border-slate-800/90'
           : 'bg-white border-slate-200/85'
       "
     >
-      <div class="flex items-center gap-1.5 p-1 rounded-xl border" :class="store.isDark ? 'bg-slate-900/90 border-slate-800' : 'bg-slate-100/90 border-slate-200/70'">
+      <div
+        class="flex items-center gap-1 p-1 rounded-xl border shrink-0"
+        :class="store.isDark ? 'bg-slate-900/90 border-slate-800' : 'bg-slate-100/90 border-slate-200/70'"
+      >
         <button
           type="button"
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-all"
+          class="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-all"
           :class="
             activeTab === 'overview'
               ? store.isDark
@@ -447,13 +462,13 @@ onMounted(() => {
           "
           @click="activeTab = 'overview'"
         >
-          <IconRenderer name="Globe" :size="14" />
-          <span>本机出口与公网 IP 情报</span>
+          <IconRenderer name="Globe" :size="13" />
+          <span>本机出口与公网 IP</span>
         </button>
 
         <button
           type="button"
-          class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-all"
+          class="flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 cursor-pointer transition-all"
           :class="
             activeTab === 'cidr'
               ? store.isDark
@@ -463,14 +478,14 @@ onMounted(() => {
           "
           @click="activeTab = 'cidr'"
         >
-          <IconRenderer name="SlidersHorizontal" :size="14" />
-          <span>IP 网络地址划分 (CIDR / 子网计算器)</span>
+          <IconRenderer name="SlidersHorizontal" :size="13" />
+          <span>IP 网络地址划分 (CIDR)</span>
         </button>
       </div>
 
-      <!-- Right Toolbar Controls -->
-      <div v-if="activeTab === 'overview'" class="flex items-center gap-2">
-        <span class="text-[11px] text-slate-400">公网查询源:</span>
+      <!-- Right Toolbar Controls (Consistent height & dropdown layout across both tabs) -->
+      <div v-if="activeTab === 'overview'" class="flex items-center gap-2 shrink-0">
+        <span class="text-[11px] text-slate-400 whitespace-nowrap">查询源:</span>
         <select
           v-model="selectedGeoSource"
           aria-label="选择公网 IP 查询源"
@@ -490,7 +505,7 @@ onMounted(() => {
 
         <button
           type="button"
-          class="flex items-center gap-1.5 h-[28px] px-2.5 rounded-lg border text-xs font-medium cursor-pointer transition-colors"
+          class="flex items-center gap-1.5 h-[28px] px-2.5 rounded-lg border text-xs font-medium whitespace-nowrap cursor-pointer transition-colors"
           :class="
             store.isDark
               ? 'bg-indigo-500/15 border-indigo-500/30 text-indigo-300 hover:bg-indigo-500/25'
@@ -507,11 +522,34 @@ onMounted(() => {
         </button>
       </div>
 
-      <div v-else class="flex items-center gap-1.5 text-[11px]">
+      <div v-else class="flex items-center gap-2 shrink-0">
+        <span class="text-[11px] text-slate-400 whitespace-nowrap">快速填入:</span>
+        <select
+          :value="selectedCidrPreset"
+          aria-label="选择预设网段或本机网段"
+          class="h-[28px] px-2.5 rounded-lg border text-[11.5px] font-medium outline-none cursor-pointer"
+          :class="
+            store.isDark
+              ? 'bg-slate-900 border-slate-700 text-slate-200'
+              : 'bg-white border-slate-200 text-slate-700'
+          "
+          @change="handlePresetSelectChange"
+        >
+          <option value="" disabled>选择常用网段或本机网段...</option>
+          <option v-if="primaryInterfaceObj" value="local">
+            本机当前网段 ({{ primaryInterfaceObj.cidr_notation }})
+          </option>
+          <option value="192.168.1.0/24">192.168.1.0/24 (C类常用内网)</option>
+          <option value="192.168.10.0/24">192.168.10.0/24 (办公子网)</option>
+          <option value="172.16.0.0/20">172.16.0.0/20 (B类容器/VPC)</option>
+          <option value="10.24.0.0/16">10.24.0.0/16 (A类大型专网)</option>
+          <option value="100.64.0.0/10">100.64.0.0/10 (运营商 CGNAT)</option>
+        </select>
+
         <button
           v-if="primaryInterfaceObj"
           type="button"
-          class="px-2.5 py-1 rounded-lg border font-mono cursor-pointer transition-colors"
+          class="flex items-center gap-1 h-[28px] px-2.5 rounded-lg border text-xs font-medium whitespace-nowrap cursor-pointer transition-colors"
           :class="
             store.isDark
               ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25'
@@ -519,21 +557,7 @@ onMounted(() => {
           "
           @click="sendInterfaceToCidr(primaryInterfaceObj.ipv4, primaryInterfaceObj.cidr_prefix)"
         >
-          填入本机网段 ({{ primaryInterfaceObj.cidr_notation }})
-        </button>
-        <button
-          v-for="sample in ['10.24.0.0/16', '172.16.0.0/20', '192.168.10.0/24']"
-          :key="sample"
-          type="button"
-          class="px-2 py-1 rounded-lg border font-mono cursor-pointer transition-colors"
-          :class="
-            store.isDark
-              ? 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
-              : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-          "
-          @click="applyExternalQuery(sample)"
-        >
-          {{ sample }}
+          <span>填入本机</span>
         </button>
       </div>
     </div>
@@ -584,7 +608,7 @@ onMounted(() => {
               ]"
             >
               <div class="min-w-0">
-                <div class="text-[10.5px] text-slate-400">当前默认路由局域网 IPv4</div>
+                <div class="text-[10.5px] text-slate-400">局域网 IPv4</div>
                 <div class="font-mono text-xl font-bold tracking-tight mt-0.5 select-text">
                   {{ localNet?.primary_ipv4 || '正在探测...' }}
                 </div>
@@ -637,7 +661,7 @@ onMounted(() => {
               @click="copyField(localNet?.gateway || '', '默认网关 IP', 'local-gateway')"
             >
               <div class="min-w-0">
-                <div class="text-[10px] text-slate-400">默认网关 (Gateway)</div>
+                <div class="text-[10px] text-slate-400">网关 (Gateway)</div>
                 <div class="font-mono font-semibold truncate mt-0.5">
                   {{ localNet?.gateway || '未检测到' }}
                 </div>
@@ -697,7 +721,7 @@ onMounted(() => {
               @click="copyField(localNet?.dns_servers?.join(', ') || '', 'DNS 服务器', 'local-dns')"
             >
               <div class="min-w-0">
-                <div class="text-[10px] text-slate-400">当前 DNS 服务器</div>
+                <div class="text-[10px] text-slate-400">DNS 服务器</div>
                 <div class="font-mono font-semibold truncate mt-0.5">
                   {{ localNet?.dns_servers?.length ? localNet.dns_servers.join(', ') : '系统自动' }}
                 </div>
@@ -748,7 +772,7 @@ onMounted(() => {
             <div class="flex items-center justify-between">
               <div class="flex items-center gap-2">
                 <span class="w-2 h-2 rounded-full bg-indigo-400"></span>
-                <span class="text-xs font-bold tracking-tight">公网出口 IP 与地理/时区情报</span>
+                <span class="text-xs font-bold tracking-tight">公网出口 IP 情报</span>
               </div>
               <span
                 v-if="publicGeo"
@@ -775,7 +799,7 @@ onMounted(() => {
               ]"
             >
               <div class="min-w-0">
-                <div class="text-[10.5px] text-slate-400">当前网络公网出口 IP</div>
+                <div class="text-[10.5px] text-slate-400">公网出口 IP</div>
                 <div class="flex items-center gap-2 mt-0.5">
                   <span v-if="publicGeo?.flagEmoji" class="text-lg leading-none">
                     {{ publicGeo.flagEmoji }}
@@ -831,7 +855,7 @@ onMounted(() => {
               "
             >
               <div class="min-w-0">
-                <div class="text-[10px] text-slate-400">出口归属地 (国家 / 城市)</div>
+                <div class="text-[10px] text-slate-400">归属地</div>
                 <div class="font-semibold truncate mt-0.5">
                   {{
                     publicGeo
@@ -869,7 +893,7 @@ onMounted(() => {
               "
             >
               <div class="min-w-0">
-                <div class="text-[10px] text-slate-400">出口时区 (Timezone)</div>
+                <div class="text-[10px] text-slate-400">时区</div>
                 <div class="font-mono font-semibold truncate mt-0.5">
                   {{
                     publicGeo
@@ -903,7 +927,7 @@ onMounted(() => {
               "
             >
               <div class="min-w-0">
-                <div class="text-[10px] text-slate-400">运营商与自治域 (ISP / ASN)</div>
+                <div class="text-[10px] text-slate-400">运营商 / ASN</div>
                 <div class="font-mono font-semibold truncate mt-0.5">
                   {{
                     publicGeo
@@ -937,7 +961,9 @@ onMounted(() => {
               "
             >
               <div class="min-w-0">
-                <div class="text-[10px] text-slate-400">国内检测源对比 (IPIP.net)</div>
+                <div class="text-[10px] text-slate-400">
+                  {{ domesticDirectGeo ? '国内检测源 (IPIP.net)' : '经纬度坐标' }}
+                </div>
                 <div class="font-mono font-semibold truncate mt-0.5">
                   <template v-if="isLoadingDomestic">检测中...</template>
                   <template v-else-if="domesticDirectGeo">
@@ -970,7 +996,7 @@ onMounted(() => {
         <div class="flex items-center justify-between gap-3">
           <div class="flex items-center gap-2 shrink-0">
             <IconRenderer name="Search" :size="14" class-name="text-indigo-400" />
-            <span class="text-xs font-bold">查询任意指定公网 IP 归属地 / 时区 / ASN</span>
+            <span class="text-xs font-bold">查询指定公网 IP</span>
           </div>
 
           <div class="flex items-center gap-2 flex-1 max-w-[440px]">
@@ -1296,55 +1322,63 @@ onMounted(() => {
           v-for="card in [
             {
               key: 'cidr-std',
-              label: '标准 CIDR 网段',
+              label: 'CIDR 网段',
               value: cidrAnalysis.standardCidr,
-              sub: cidrAnalysis.rfcCategory.split(' ')[0] + ' ' + (cidrAnalysis.rfcCategory.split(' ')[1] || '')
+              sub: `掩码长度 /${cidrAnalysis.prefix}`,
+              compactFont: false
             },
             {
               key: 'cidr-net',
-              label: '网络地址 (Network IP)',
+              label: '网络地址',
               value: cidrAnalysis.networkIp,
-              sub: '网段起始标识地址'
+              sub: '网段起始地址',
+              compactFont: false
             },
             {
               key: 'cidr-bcast',
-              label: '广播地址 (Broadcast IP)',
+              label: '广播地址',
               value: cidrAnalysis.broadcastIp,
-              sub: '网段末尾广播地址'
+              sub: '网段末尾广播',
+              compactFont: false
             },
             {
               key: 'cidr-hosts',
-              label: '可用主机数量',
+              label: '可用主机数',
               value: `${cidrAnalysis.usableHosts} 台`,
-              sub: `共 ${cidrAnalysis.totalAddresses} 个 IP 地址`
+              sub: `共 ${cidrAnalysis.totalAddresses} 个 IP`,
+              compactFont: false
             },
             {
               key: 'cidr-range',
-              label: '可用主机 IP 范围 (Host Range)',
+              label: '可用主机范围',
               value: cidrAnalysis.hostRange,
-              sub: `首: ${cidrAnalysis.firstHostIp} · 尾: ${cidrAnalysis.lastHostIp}`
+              sub: `首 ${cidrAnalysis.firstHostIp} · 尾 ${cidrAnalysis.lastHostIp}`,
+              compactFont: true
             },
             {
               key: 'cidr-mask',
-              label: '子网掩码 (Subnet Mask)',
+              label: '子网掩码',
               value: cidrAnalysis.subnetMask,
-              sub: `十六进制: ${cidrAnalysis.subnetMaskHex}`
+              sub: `HEX: ${cidrAnalysis.subnetMaskHex}`,
+              compactFont: false
             },
             {
               key: 'cidr-wildcard',
-              label: '反掩码 / 通配符 (Wildcard)',
+              label: '反掩码 (Wildcard)',
               value: cidrAnalysis.wildcardMask,
-              sub: 'ACL / OSPF 路由配置常用'
+              sub: 'ACL / OSPF 通配符',
+              compactFont: false
             },
             {
               key: 'cidr-rfc',
-              label: '地址属性分类 (RFC)',
+              label: '地址类型',
               value: cidrAnalysis.rfcBadge,
-              sub: cidrAnalysis.rfcCategory
+              sub: cidrAnalysis.rfcCategory.split(' (')[0],
+              compactFont: false
             }
           ]"
           :key="card.key"
-          class="p-3 rounded-xl border flex flex-col justify-between cursor-pointer transition-all"
+          class="p-2.5 rounded-xl border flex flex-col justify-between cursor-pointer transition-all"
           :class="[
             isCopied(card.key)
               ? 'border-emerald-500/70 bg-emerald-500/10'
@@ -1355,14 +1389,17 @@ onMounted(() => {
           @click="copyField(card.value, card.label, card.key)"
         >
           <div class="flex items-center justify-between gap-1">
-            <span class="text-[10.5px] text-slate-400 truncate">{{ card.label }}</span>
+            <span class="text-[11px] font-medium text-slate-400 truncate">{{ card.label }}</span>
             <IconRenderer
               :name="isCopied(card.key) ? 'Check' : 'Copy'"
-              :size="12"
+              :size="11"
               :class-name="isCopied(card.key) ? 'text-emerald-400 shrink-0' : 'text-slate-400 shrink-0'"
             />
           </div>
-          <div class="font-mono text-[13.5px] font-bold tracking-tight my-1 truncate select-text">
+          <div
+            class="font-mono font-bold tracking-tight my-1 select-text"
+            :class="card.compactFont ? 'text-[11.5px] leading-snug break-all' : 'text-[13px] truncate'"
+          >
             {{ card.value }}
           </div>
           <div class="text-[10px] text-slate-400 truncate">
@@ -1383,28 +1420,29 @@ onMounted(() => {
           "
         >
           <div class="flex items-center justify-between gap-2">
-            <div class="text-xs font-bold">
-              VLSM 子网进一步划分 ({{ cidrAnalysis.standardCidr }} 拆分)
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span class="text-xs font-bold whitespace-nowrap">子网进一步划分</span>
+              <span class="text-[11px] font-mono text-indigo-400 truncate">
+                ({{ cidrAnalysis.standardCidr }})
+              </span>
             </div>
-            <div v-if="splitOptions.length > 0" class="flex items-center gap-1">
-              <button
-                v-for="opt in splitOptions"
-                :key="opt.targetPf"
-                type="button"
-                class="px-2 py-0.5 rounded-md border font-mono text-[10.5px] cursor-pointer transition-colors"
+
+            <div v-if="splitOptions.length > 0" class="flex items-center gap-1.5 shrink-0">
+              <span class="text-[11px] text-slate-400 whitespace-nowrap">拆分粒度:</span>
+              <select
+                v-model.number="splitTargetPrefix"
+                aria-label="选择子网拆分粒度"
+                class="h-[26px] px-2 rounded-lg border font-mono text-[11px] font-semibold outline-none cursor-pointer"
                 :class="
-                  splitTargetPrefix === opt.targetPf
-                    ? store.isDark
-                      ? 'bg-indigo-500/25 border-indigo-500 text-indigo-300 font-bold'
-                      : 'bg-indigo-600 border-indigo-600 text-white font-bold'
-                    : store.isDark
-                      ? 'bg-slate-900 border-slate-800 text-slate-400'
-                      : 'bg-slate-50 border-slate-200 text-slate-600'
+                  store.isDark
+                    ? 'bg-slate-900 border-slate-700 text-indigo-300'
+                    : 'bg-slate-50 border-slate-200 text-indigo-600'
                 "
-                @click="splitTargetPrefix = opt.targetPf"
               >
-                /{{ opt.targetPf }} ({{ opt.subnetCount }}个子网)
-              </button>
+                <option v-for="opt in splitOptions" :key="opt.targetPf" :value="opt.targetPf">
+                  /{{ opt.targetPf }} ({{ opt.subnetCount }} 个子网 · 每网 {{ opt.hostsPerSubnet }} 台)
+                </option>
+              </select>
             </div>
           </div>
 
@@ -1452,7 +1490,7 @@ onMounted(() => {
           "
         >
           <div class="space-y-2">
-            <div class="text-xs font-bold">IP 归属网段校验 (IP in CIDR)</div>
+            <div class="text-xs font-bold">IP 归属网段校验</div>
             <div class="text-[11px] text-slate-400">
               输入任意 IPv4 地址，判断其是否落在当前网段
               <code class="font-mono text-indigo-400">{{ cidrAnalysis.standardCidr }}</code>
