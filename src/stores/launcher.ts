@@ -482,23 +482,54 @@ export const useLauncherStore = defineStore('launcher', () => {
       userSettings.value.showAppRecommendation !== false
     )
 
-    // Enrich `cmd:copy-local-ip` with live local IPv4 address so typing `ip` shows the IP right in the row
+    // Enrich `cmd:copy-local-ip` and `plugin:ip-studio` with live local IPv4 address so typing `ip` shows the IP right in the row
     for (const item of matched) {
-      if (item.id === 'cmd:copy-local-ip') {
+      if (item.id === 'cmd:copy-local-ip' || item.id === 'plugin:ip-studio') {
         if (!cachedLocalIp.value) {
           refreshLocalIp().then(() => {
             if (searchQuery.value.trim().toLowerCase().includes('ip')) {
               runSearch()
             }
           })
-        } else {
+        } else if (item.id === 'cmd:copy-local-ip') {
           item.title = `查询并复制本机局域网 IP · ${cachedLocalIp.value}`
           item.subtitle = `当前局域网 IPv4 地址：${cachedLocalIp.value} （按 Enter 立即复制到剪贴板）`
+        } else if (item.id === 'plugin:ip-studio') {
+          item.subtitle = `本机出口 IP: ${cachedLocalIp.value} · 查询公网出口 IP (GeoJS/时区/ASN)、多网卡路由与 CIDR 子网划分`
         }
       }
     }
 
     const finalResults: SearchResultItem[] = []
+
+    // Smart IPv4 / CIDR detection -> Direct jump to IP & Network Studio
+    if (/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(trimmed)) {
+      finalResults.push({
+        id: 'quick:ip-studio',
+        title: `CIDR 子网划分计算：${trimmed}`,
+        subtitle: '打开「IP 与网络工作台」计算网络地址、广播地址、可用主机范围、32位二进制位图与 VLSM 拆分',
+        category: 'plugin',
+        icon: 'Globe',
+        keywords: ['cidr', 'ip', 'subnet'],
+        action_payload: trimmed,
+        score: 9998,
+        match_type: '网段识别',
+        badge: 'CIDR 直达'
+      })
+    } else if (/^\d{1,3}(\.\d{1,3}){3}$/.test(trimmed)) {
+      finalResults.push({
+        id: 'quick:ip-studio',
+        title: `查询 IP 归属地 / 划分子网：${trimmed}`,
+        subtitle: '打开「IP 与网络工作台」查询该 IP 的全球地理位置、ASN 运营商、时区或进行 CIDR 掩码划分',
+        category: 'plugin',
+        icon: 'Globe',
+        keywords: ['ip', 'geo'],
+        action_payload: trimmed,
+        score: 9998,
+        match_type: 'IP 识别',
+        badge: 'IP 直达'
+      })
+    }
 
     const quickJson = tryDetectQuickJson(q)
     if (quickJson) finalResults.push(quickJson)
@@ -637,6 +668,13 @@ export const useLauncherStore = defineStore('launcher', () => {
       return
     }
 
+    if (item.id === 'quick:ip-studio') {
+      pluginInitialPayload.value = item.action_payload
+      openPlugin('ip-studio')
+      searchQuery.value = ''
+      return
+    }
+
     if (item.category === 'totp' && item.totpCode) {
       await navigator.clipboard.writeText(item.totpCode)
       showToast(`已复制 ${item.title} 验证码：${item.totpCode}`)
@@ -699,6 +737,7 @@ export const useLauncherStore = defineStore('launcher', () => {
       'diff-viewer': '在对比视图中高亮检索关键词...',
       'authenticator': '按平台名称、账户邮箱或分类筛选 2FA 令牌...',
       'password-vault': '搜索密码本中的网站、账号、备注...',
+      'ip-studio': '输入任意公网 IP 查询归属地，或输入 CIDR (如 192.168.1.0/24) 划分子网...',
       'utools-hub': '搜索已挂载的 uTools 扩展或输入 plugin.json 配置...',
       'utools-runner': 'uTools 兼容沙箱子输入框 (window.utools.setSubInput)...',
       'user-center': '在个人中心搜索本机应用或配置项...'
@@ -761,6 +800,7 @@ export const useLauncherStore = defineStore('launcher', () => {
         'diff-viewer': '文本对比',
         'authenticator': '2FA 验证码',
         'password-vault': '密码本',
+        'ip-studio': 'IP 与网络工作台',
         'utools-hub': 'uTools 插件中心',
         'user-center': '个人中心与设置'
       }
@@ -878,6 +918,7 @@ export const useLauncherStore = defineStore('launcher', () => {
       'diff-viewer': { id: 'diff-viewer', name: '文本对比', icon: 'GitCompare', badge: 'Diff Viewer' },
       'authenticator': { id: 'authenticator', name: '2FA 验证码', icon: 'ShieldCheck', badge: 'TOTP 2FA' },
       'password-vault': { id: 'password-vault', name: '密码本', icon: 'KeyRound', badge: 'AES-256 Vault' },
+      'ip-studio': { id: 'ip-studio', name: 'IP 与网络工作台', icon: 'Globe', badge: 'IP & CIDR Studio' },
       'utools-hub': { id: 'utools-hub', name: 'uTools 插件中心', icon: 'Blocks', badge: '无限制挂载' },
       'user-center': { id: 'user-center', name: '个人中心与设置', icon: 'SlidersHorizontal', badge: 'Control Hub' }
     }

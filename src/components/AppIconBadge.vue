@@ -63,6 +63,9 @@ const gradientStyle = computed(() => {
   if (id.includes('password-vault')) {
     return 'bg-gradient-to-br from-rose-500 via-pink-600 to-red-600 text-white shadow-sm shadow-rose-500/20'
   }
+  if (id.includes('ip-studio')) {
+    return 'bg-gradient-to-br from-cyan-400 via-teal-500 to-indigo-600 text-white shadow-sm shadow-cyan-500/20'
+  }
   if (id.includes('regex')) {
     return 'bg-gradient-to-br from-amber-400 via-yellow-500 to-orange-500 text-white shadow-sm shadow-amber-500/20'
   }

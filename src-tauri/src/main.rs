@@ -809,6 +809,30 @@ fn build_core_items(sys_apps: &[SearchableItem]) -> Vec<SearchableItem> {
             "password-vault",
         ),
         SearchableItem::new(
+            "plugin:ip-studio",
+            "IP 与网络工作台 (IP & Network Studio)",
+            "查询本机 Wi-Fi/有线实际出口 IP、公网出口 IP 归属地/时区/ASN 与 CIDR 子网划分计算器",
+            "plugin",
+            "Globe",
+            None,
+            vec![
+                "ip",
+                "network",
+                "cidr",
+                "subnet",
+                "mask",
+                "geoip",
+                "公网ip",
+                "局域网",
+                "子网掩码",
+                "网络地址划分",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+            "ip-studio",
+        ),
+        SearchableItem::new(
             "plugin:utools-hub",
             "uTools 插件中心与沙箱挂载",
             "突破 10 个应用限制，无限挂载本地与开源 uTools 生态插件 (plugin.json)",
@@ -2096,6 +2120,361 @@ fn read_clipboard_image_base64() -> Result<Option<String>, String> {
     Ok(None)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalNetworkInterface {
+    pub name: String,
+    pub display_name: String,
+    pub kind: String,
+    pub ipv4: String,
+    pub ipv6: Option<String>,
+    pub netmask: String,
+    pub cidr_prefix: u8,
+    pub cidr_notation: String,
+    pub broadcast: Option<String>,
+    pub mac: Option<String>,
+    pub is_primary: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LocalNetworkOverview {
+    pub primary_interface: Option<String>,
+    pub primary_display_name: Option<String>,
+    pub primary_ipv4: String,
+    pub gateway: Option<String>,
+    pub dns_servers: Vec<String>,
+    pub hostname: String,
+    pub interfaces: Vec<LocalNetworkInterface>,
+}
+
+fn parse_netmask_token(token: &str) -> (String, u8) {
+    let clean = token.trim();
+    if let Some(hex_str) = clean.strip_prefix("0x").or_else(|| clean.strip_prefix("0X")) {
+        if let Ok(val) = u32::from_str_radix(hex_str, 16) {
+            let b1 = (val >> 24) & 0xff;
+            let b2 = (val >> 16) & 0xff;
+            let b3 = (val >> 8) & 0xff;
+            let b4 = val & 0xff;
+            let prefix = val.count_ones() as u8;
+            return (format!("{}.{}.{}.{}", b1, b2, b3, b4), prefix);
+        }
+    }
+    let parts: Vec<u8> = clean
+        .split('.')
+        .filter_map(|p| p.parse::<u8>().ok())
+        .collect();
+    if parts.len() == 4 {
+        let val = ((parts[0] as u32) << 24)
+            | ((parts[1] as u32) << 16)
+            | ((parts[2] as u32) << 8)
+            | (parts[3] as u32);
+        return (clean.to_string(), val.count_ones() as u8);
+    }
+    ("255.255.255.0".to_string(), 24)
+}
+
+#[tauri::command]
+async fn get_local_network_overview() -> Result<LocalNetworkOverview, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<LocalNetworkOverview, String> {
+        let mut default_iface: Option<String> = None;
+        let mut default_gateway: Option<String> = None;
+
+        // 1. Parse `route -n get default` for primary active interface and gateway
+        if let Ok(out) = Command::new("route").args(["-n", "get", "default"]).output() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("interface:") {
+                    let iface = rest.trim().to_string();
+                    if !iface.is_empty() {
+                        default_iface = Some(iface);
+                    }
+                } else if let Some(rest) = trimmed.strip_prefix("gateway:") {
+                    let gw = rest.trim().to_string();
+                    if !gw.is_empty() {
+                        default_gateway = Some(gw);
+                    }
+                }
+            }
+        }
+
+        // 2. Parse `networksetup -listallhardwareports` to map `en0` -> `Wi-Fi`, `en4` -> `Ethernet Adapter`
+        let mut hw_port_map: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        if let Ok(out) = Command::new("networksetup")
+            .arg("-listallhardwareports")
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut cur_port: Option<String> = None;
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if let Some(rest) = trimmed.strip_prefix("Hardware Port:") {
+                    cur_port = Some(rest.trim().to_string());
+                } else if let Some(rest) = trimmed.strip_prefix("Device:") {
+                    let dev = rest.trim().to_string();
+                    if let Some(port) = cur_port.take() {
+                        hw_port_map.insert(dev, port);
+                    }
+                }
+            }
+        }
+
+        // 3. Parse `ifconfig` to collect all active IPv4 interfaces
+        let mut interfaces: Vec<LocalNetworkInterface> = Vec::new();
+        if let Ok(out) = Command::new("ifconfig").output() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            let mut cur_name: Option<String> = None;
+            let mut cur_mac: Option<String> = None;
+            let mut cur_ipv4: Option<String> = None;
+            let mut cur_netmask: String = "255.255.255.0".to_string();
+            let mut cur_prefix: u8 = 24;
+            let mut cur_broadcast: Option<String> = None;
+            let mut cur_ipv6: Option<String> = None;
+
+            let flush_iface = |name_opt: &mut Option<String>,
+                               mac_opt: &mut Option<String>,
+                               ipv4_opt: &mut Option<String>,
+                               netmask: &mut String,
+                               prefix: &mut u8,
+                               broadcast_opt: &mut Option<String>,
+                               ipv6_opt: &mut Option<String>,
+                               list: &mut Vec<LocalNetworkInterface>| {
+                if let (Some(name), Some(ipv4)) = (name_opt.take(), ipv4_opt.take()) {
+                    if name != "lo0" && ipv4 != "127.0.0.1" {
+                        let raw_hw = hw_port_map.get(&name).cloned().unwrap_or_default();
+                        let lower_hw = raw_hw.to_lowercase();
+                        let (kind, display_name) = if lower_hw.contains("wi-fi")
+                            || lower_hw.contains("airport")
+                        {
+                            ("wifi".to_string(), format!("Wi-Fi 无线网络 ({})", name))
+                        } else if lower_hw.contains("ethernet")
+                            || lower_hw.contains("lan")
+                            || lower_hw.contains("thunderbolt") && !lower_hw.contains("bridge")
+                        {
+                            (
+                                "ethernet".to_string(),
+                                format!("{} ({})", raw_hw, name),
+                            )
+                        } else if name.starts_with("utun")
+                            || name.starts_with("ppp")
+                            || name.starts_with("ipsec")
+                            || name.starts_with("tun")
+                            || name.starts_with("tap")
+                        {
+                            (
+                                "vpn".to_string(),
+                                format!("VPN / 代理隧道接口 ({})", name),
+                            )
+                        } else if name.starts_with("bridge") || lower_hw.contains("bridge") {
+                            (
+                                "bridge".to_string(),
+                                format!("虚拟网桥 / 共享网络 ({})", name),
+                            )
+                        } else if !raw_hw.is_empty() {
+                            ("ethernet".to_string(), format!("{} ({})", raw_hw, name))
+                        } else {
+                            ("other".to_string(), format!("网络接口 ({})", name))
+                        };
+
+                        let is_primary = default_iface.as_deref() == Some(name.as_str());
+                        let cidr_notation = format!("{}/{}", ipv4, *prefix);
+                        list.push(LocalNetworkInterface {
+                            name,
+                            display_name,
+                            kind,
+                            ipv4,
+                            ipv6: ipv6_opt.take(),
+                            netmask: netmask.clone(),
+                            cidr_prefix: *prefix,
+                            cidr_notation,
+                            broadcast: broadcast_opt.take(),
+                            mac: mac_opt.take(),
+                            is_primary,
+                        });
+                    }
+                }
+                *mac_opt = None;
+                *ipv4_opt = None;
+                *netmask = "255.255.255.0".to_string();
+                *prefix = 24;
+                *broadcast_opt = None;
+                *ipv6_opt = None;
+            };
+
+            for line in text.lines() {
+                if !line.starts_with('\t') && !line.starts_with(' ') && line.contains(':') {
+                    flush_iface(
+                        &mut cur_name,
+                        &mut cur_mac,
+                        &mut cur_ipv4,
+                        &mut cur_netmask,
+                        &mut cur_prefix,
+                        &mut cur_broadcast,
+                        &mut cur_ipv6,
+                        &mut interfaces,
+                    );
+                    if let Some((iface_token, _)) = line.split_once(':') {
+                        cur_name = Some(iface_token.trim().to_string());
+                    }
+                } else {
+                    let trimmed = line.trim();
+                    if let Some(rest) = trimmed.strip_prefix("ether ") {
+                        cur_mac = Some(rest.trim().to_string());
+                    } else if let Some(rest) = trimmed.strip_prefix("inet ") {
+                        let tokens: Vec<&str> = rest.split_whitespace().collect();
+                        if !tokens.is_empty() {
+                            cur_ipv4 = Some(tokens[0].to_string());
+                            for i in 0..tokens.len() {
+                                if tokens[i] == "netmask" && i + 1 < tokens.len() {
+                                    let (nm, pf) = parse_netmask_token(tokens[i + 1]);
+                                    cur_netmask = nm;
+                                    cur_prefix = pf;
+                                } else if tokens[i] == "broadcast" && i + 1 < tokens.len() {
+                                    cur_broadcast = Some(tokens[i + 1].to_string());
+                                }
+                            }
+                        }
+                    } else if let Some(rest) = trimmed.strip_prefix("inet6 ") {
+                        let tokens: Vec<&str> = rest.split_whitespace().collect();
+                        if !tokens.is_empty() {
+                            let raw_v6 = tokens[0].split('%').next().unwrap_or(tokens[0]);
+                            if cur_ipv6.is_none() || !raw_v6.starts_with("fe80:") {
+                                cur_ipv6 = Some(raw_v6.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            flush_iface(
+                &mut cur_name,
+                &mut cur_mac,
+                &mut cur_ipv4,
+                &mut cur_netmask,
+                &mut cur_prefix,
+                &mut cur_broadcast,
+                &mut cur_ipv6,
+                &mut interfaces,
+            );
+        }
+
+        // If default_iface is a VPN `utun` without a matching entry or if no interface was marked primary yet,
+        // mark the first physical interface (`wifi` or `ethernet`) as primary fallback
+        if !interfaces.iter().any(|i| i.is_primary) {
+            if let Some(first_phys) = interfaces
+                .iter_mut()
+                .find(|i| i.kind == "wifi" || i.kind == "ethernet")
+            {
+                first_phys.is_primary = true;
+                if default_iface.is_none() {
+                    default_iface = Some(first_phys.name.clone());
+                }
+            } else if let Some(first_any) = interfaces.first_mut() {
+                first_any.is_primary = true;
+            }
+        }
+
+        // Sort so primary interface comes first, then Wi-Fi / Ethernet, then VPN / Bridge
+        interfaces.sort_by_key(|i| {
+            let prio = if i.is_primary {
+                0
+            } else if i.kind == "wifi" {
+                1
+            } else if i.kind == "ethernet" {
+                2
+            } else if i.kind == "vpn" {
+                3
+            } else {
+                4
+            };
+            (prio, i.name.clone())
+        });
+
+        let primary_item = interfaces.first().cloned();
+        let primary_ipv4 = primary_item
+            .as_ref()
+            .map(|i| i.ipv4.clone())
+            .unwrap_or_else(|| "127.0.0.1".to_string());
+        let primary_display_name = primary_item.as_ref().map(|i| i.display_name.clone());
+        let primary_interface = primary_item
+            .as_ref()
+            .map(|i| i.name.clone())
+            .or(default_iface);
+
+        // 4. Parse DNS servers from `scutil --dns`
+        let mut dns_servers: Vec<String> = Vec::new();
+        if let Ok(out) = Command::new("scutil").arg("--dns").output() {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("nameserver[") {
+                    if let Some((_, rhs)) = trimmed.split_once(':') {
+                        let ip = rhs.trim().to_string();
+                        if !ip.is_empty() && !dns_servers.contains(&ip) {
+                            dns_servers.push(ip);
+                            if dns_servers.len() >= 4 {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 5. Get local hostname
+        let mut hostname = "Mac".to_string();
+        if let Ok(out) = Command::new("scutil").args(["--get", "LocalHostName"]).output() {
+            let h = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !h.is_empty() {
+                hostname = h;
+            }
+        }
+
+        Ok(LocalNetworkOverview {
+            primary_interface,
+            primary_display_name,
+            primary_ipv4,
+            gateway: default_gateway,
+            dns_servers,
+            hostname,
+            interfaces,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn fetch_url_json_via_curl(url: String) -> Result<String, String> {
+    let allowed_hosts = [
+        "https://get.geojs.io/",
+        "http://ip-api.com/",
+        "https://ipwho.is/",
+        "https://ipinfo.io/",
+        "https://myip.ipip.net/",
+        "https://api.ipify.org",
+    ];
+    if !allowed_hosts.iter().any(|prefix| url.starts_with(prefix)) {
+        return Err("不允许的请求域名".to_string());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let out = Command::new("/usr/bin/curl")
+            .args(["-s", "-L", "-m", "4", "-A", "OmniBox/2.0", &url])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !out.status.success() {
+            return Err("请求超时或网络不可达".to_string());
+        }
+        let body = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if body.is_empty() {
+            return Err("返回内容为空".to_string());
+        }
+        Ok(body)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 fn main() {
     let app_data_dir = dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -2168,7 +2547,9 @@ fn main() {
             vault_encrypt_payload,
             vault_decrypt_payload,
             capture_screen_region_base64,
-            read_clipboard_image_base64
+            read_clipboard_image_base64,
+            get_local_network_overview,
+            fetch_url_json_via_curl
         ])
         .build(tauri::generate_context!())
         .expect("error while building OmniBox Tauri application");

@@ -29,6 +29,7 @@ function shortLabel(title: string): string {
     .replace('uTools 插件中心与沙箱挂载', '插件市场')
     .replace('插件应用市场', '插件市场')
     .replace('2FA 验证码管理', '2FA 令牌')
+    .replace('IP 与网络工作台', 'IP 工作台')
     .replace('文本对比', '文本比对')
     .replace('VS Code 编辑器', 'VS Code')
     .replace('Google Chrome 浏览器', 'Chrome')

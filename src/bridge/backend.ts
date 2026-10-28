@@ -239,6 +239,28 @@ export const CORE_PLUGIN_ITEMS: Omit<SearchResultItem, 'score' | 'match_type'>[]
     badge: '安全加密'
   },
   {
+    id: 'plugin:ip-studio',
+    title: 'IP 与网络工作台 (IP & Network Studio)',
+    subtitle: '查询本机 Wi-Fi/有线实际出口 IP、公网出口 IP 归属地/时区/ASN 与 CIDR 子网划分计算器',
+    category: 'plugin',
+    icon: 'Globe',
+    keywords: [
+      'ip',
+      'network',
+      'cidr',
+      'subnet',
+      'mask',
+      'geoip',
+      '公网ip',
+      '局域网',
+      '子网掩码',
+      '网络地址划分',
+      'ipgzt'
+    ],
+    action_payload: 'ip-studio',
+    badge: '内置极速'
+  },
+  {
     id: 'plugin:utools-hub',
     title: 'uTools 插件中心与沙箱挂载',
     subtitle: '突破 10 个应用限制，无限挂载本地与开源 uTools 生态插件 (plugin.json)',
@@ -1014,4 +1036,261 @@ export async function readClipboardImageBase64(): Promise<string | null> {
     }
   }
   return null
+}
+
+export interface LocalNetworkInterface {
+  name: string
+  display_name: string
+  kind: 'wifi' | 'ethernet' | 'vpn' | 'bridge' | 'other' | string
+  ipv4: string
+  ipv6?: string | null
+  netmask: string
+  cidr_prefix: number
+  cidr_notation: string
+  broadcast?: string | null
+  mac?: string | null
+  is_primary: boolean
+}
+
+export interface LocalNetworkOverview {
+  primary_interface?: string | null
+  primary_display_name?: string | null
+  primary_ipv4: string
+  gateway?: string | null
+  dns_servers: string[]
+  hostname: string
+  interfaces: LocalNetworkInterface[]
+}
+
+export interface PublicIpGeoInfo {
+  ip: string
+  country: string
+  countryCode: string
+  region: string
+  city: string
+  flagEmoji: string
+  timezone: string
+  utcOffset: string
+  asn: string
+  isp: string
+  org: string
+  latitude: string
+  longitude: string
+  sourceName: string
+  latencyMs: number
+}
+
+export async function fetchLocalNetworkOverview(): Promise<LocalNetworkOverview> {
+  if (isTauriEnv()) {
+    try {
+      return await invoke<LocalNetworkOverview>('get_local_network_overview')
+    } catch {
+      // Fallback below
+    }
+  }
+  return {
+    primary_interface: 'en0',
+    primary_display_name: 'Wi-Fi 无线网络 (en0)',
+    primary_ipv4: '192.168.50.108',
+    gateway: '192.168.50.1',
+    dns_servers: ['223.5.5.5', '8.8.8.8'],
+    hostname: 'MacBook-Pro',
+    interfaces: [
+      {
+        name: 'en0',
+        display_name: 'Wi-Fi 无线网络 (en0)',
+        kind: 'wifi',
+        ipv4: '192.168.50.108',
+        ipv6: 'fe80::1c2b:3a4d:5e6f:7a8b',
+        netmask: '255.255.255.0',
+        cidr_prefix: 24,
+        cidr_notation: '192.168.50.108/24',
+        broadcast: '192.168.50.255',
+        mac: '90:9b:6f:15:bc:93',
+        is_primary: true
+      }
+    ]
+  }
+}
+
+async function fetchJsonWithFallback(url: string, timeoutMs = 3800): Promise<any> {
+  if (isTauriEnv()) {
+    try {
+      const raw = await invoke<string>('fetch_url_json_via_curl', { url })
+      return JSON.parse(raw)
+    } catch {
+      // Fallback to browser fetch if HTTPS
+    }
+  }
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(url, { signal: controller.signal })
+    clearTimeout(timer)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return await res.json()
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+function countryCodeToFlagEmoji(cc?: string): string {
+  if (!cc || cc.length !== 2) return '🌐'
+  const upper = cc.toUpperCase()
+  const c1 = upper.codePointAt(0)
+  const c2 = upper.codePointAt(1)
+  if (!c1 || !c2 || c1 < 65 || c1 > 90 || c2 < 65 || c2 > 90) return '🌐'
+  return String.fromCodePoint(0x1f1e6 + (c1 - 65), 0x1f1e6 + (c2 - 65))
+}
+
+export async function fetchPublicIpGeo(
+  targetIp = '',
+  source: 'auto' | 'geojs' | 'ipapi' | 'ipwhois' | 'ipip' = 'auto'
+): Promise<PublicIpGeoInfo> {
+  const cleanIp = targetIp.trim()
+  const t0 = performance.now()
+
+  const parseGeoJs = async (): Promise<PublicIpGeoInfo> => {
+    const url = cleanIp
+      ? `https://get.geojs.io/v1/ip/geo/${encodeURIComponent(cleanIp)}.json`
+      : 'https://get.geojs.io/v1/ip/geo.json'
+    const d = await fetchJsonWithFallback(url)
+    if (!d || !d.ip) throw new Error('GeoJS 返回无效')
+    const cc = d.country_code || ''
+    return {
+      ip: d.ip,
+      country: d.country || '未知国家',
+      countryCode: cc,
+      region: d.region || '',
+      city: d.city || '',
+      flagEmoji: countryCodeToFlagEmoji(cc),
+      timezone: d.timezone || 'UTC',
+      utcOffset: '',
+      asn: d.asn ? `AS${d.asn}` : '',
+      isp: d.organization_name || d.organization || '未知运营商',
+      org: d.organization || d.organization_name || '',
+      latitude: String(d.latitude || ''),
+      longitude: String(d.longitude || ''),
+      sourceName: 'GeoJS (get.geojs.io)',
+      latencyMs: Math.round(performance.now() - t0)
+    }
+  }
+
+  const parseIpApiZh = async (): Promise<PublicIpGeoInfo> => {
+    const url = cleanIp
+      ? `http://ip-api.com/json/${encodeURIComponent(cleanIp)}?lang=zh-CN`
+      : 'http://ip-api.com/json/?lang=zh-CN'
+    const d = await fetchJsonWithFallback(url)
+    if (!d || d.status !== 'success') throw new Error('ip-api 返回无效')
+    const cc = d.countryCode || ''
+    return {
+      ip: d.query,
+      country: d.country || '未知',
+      countryCode: cc,
+      region: d.regionName || '',
+      city: d.city || '',
+      flagEmoji: countryCodeToFlagEmoji(cc),
+      timezone: d.timezone || 'UTC',
+      utcOffset: '',
+      asn: (d.as || '').split(' ')[0] || '',
+      isp: d.isp || '未知运营商',
+      org: d.org || d.as || '',
+      latitude: d.lat !== undefined ? String(d.lat) : '',
+      longitude: d.lon !== undefined ? String(d.lon) : '',
+      sourceName: 'ip-api.com (中文地理源)',
+      latencyMs: Math.round(performance.now() - t0)
+    }
+  }
+
+  const parseIpWhois = async (): Promise<PublicIpGeoInfo> => {
+    const url = cleanIp
+      ? `https://ipwho.is/${encodeURIComponent(cleanIp)}`
+      : 'https://ipwho.is/'
+    const d = await fetchJsonWithFallback(url)
+    if (!d || d.success === false || !d.ip) throw new Error('ipwho.is 返回无效')
+    const cc = d.country_code || ''
+    return {
+      ip: d.ip,
+      country: d.country || '未知',
+      countryCode: cc,
+      region: d.region || '',
+      city: d.city || '',
+      flagEmoji: d.flag?.emoji || countryCodeToFlagEmoji(cc),
+      timezone: d.timezone?.id || 'UTC',
+      utcOffset: d.timezone?.utc ? `UTC${d.timezone.utc}` : '',
+      asn: d.connection?.asn ? `AS${d.connection.asn}` : '',
+      isp: d.connection?.isp || d.connection?.org || '未知运营商',
+      org: d.connection?.org || '',
+      latitude: d.latitude !== undefined ? String(d.latitude) : '',
+      longitude: d.longitude !== undefined ? String(d.longitude) : '',
+      sourceName: 'ipwho.is',
+      latencyMs: Math.round(performance.now() - t0)
+    }
+  }
+
+  const parseIpIpNet = async (): Promise<PublicIpGeoInfo> => {
+    const url = 'https://myip.ipip.net/json'
+    const d = await fetchJsonWithFallback(url)
+    if (!d || !d.data || !d.data.ip) throw new Error('IPIP.net 返回无效')
+    const loc: string[] = Array.isArray(d.data.location) ? d.data.location : []
+    return {
+      ip: d.data.ip,
+      country: loc[0] || '中国',
+      countryCode: loc[0] === '中国' ? 'CN' : '',
+      region: loc[1] || '',
+      city: loc[2] || '',
+      flagEmoji: loc[0] === '中国' ? '🇨🇳' : '🌐',
+      timezone: 'Asia/Shanghai',
+      utcOffset: 'UTC+08:00',
+      asn: '',
+      isp: loc[4] || loc[3] || '国内直连运营商',
+      org: loc.filter(Boolean).join(' · '),
+      latitude: '',
+      longitude: '',
+      sourceName: 'IPIP.net (国内直连检测)',
+      latencyMs: Math.round(performance.now() - t0)
+    }
+  }
+
+  if (source === 'geojs') return await parseGeoJs()
+  if (source === 'ipapi') return await parseIpApiZh()
+  if (source === 'ipwhois') return await parseIpWhois()
+  if (source === 'ipip') return await parseIpIpNet()
+
+  // 'auto': Concurrently race/merge GeoJS (primary user requested) + ip-api (Chinese labels) + ipwho.is (UTC offset)
+  const [geoRes, zhRes, whoRes] = await Promise.allSettled([
+    parseGeoJs(),
+    parseIpApiZh(),
+    parseIpWhois()
+  ])
+
+  const base =
+    geoRes.status === 'fulfilled'
+      ? geoRes.value
+      : zhRes.status === 'fulfilled'
+        ? zhRes.value
+        : whoRes.status === 'fulfilled'
+          ? whoRes.value
+          : null
+
+  if (!base) {
+    throw new Error('所有公网 IP 查询源均超时或不可达')
+  }
+
+  // Enrich GeoJS result with Chinese location from ip-api and UTC offset from ipwho.is if same IP
+  if (zhRes.status === 'fulfilled' && zhRes.value.ip === base.ip) {
+    base.country = `${zhRes.value.country} (${base.country})`
+    if (zhRes.value.region) base.region = zhRes.value.region
+    if (zhRes.value.city) base.city = zhRes.value.city
+    if (zhRes.value.org && !base.org.includes(zhRes.value.org)) {
+      base.org = `${zhRes.value.org} · ${base.isp}`
+    }
+  }
+  if (whoRes.status === 'fulfilled' && whoRes.value.ip === base.ip) {
+    if (whoRes.value.utcOffset) base.utcOffset = whoRes.value.utcOffset
+    if (whoRes.value.flagEmoji) base.flagEmoji = whoRes.value.flagEmoji
+  }
+  base.sourceName = 'GeoJS + 多源聚合校准'
+  base.latencyMs = Math.round(performance.now() - t0)
+  return base
 }
