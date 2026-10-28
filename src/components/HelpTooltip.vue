@@ -54,29 +54,41 @@ const isOpen = ref(false)
       <div
         v-if="isOpen"
         role="tooltip"
-        class="absolute z-50 w-[270px] p-3 rounded-xl border shadow-xl text-left pointer-events-none leading-relaxed font-normal"
+        class="absolute z-50 w-[276px] p-3 rounded-xl border text-left pointer-events-none leading-relaxed font-normal backdrop-blur-md"
         :class="[
           placement === 'right'
             ? 'left-6 top-1/2 -translate-y-1/2'
             : 'bottom-6 left-1/2 -translate-x-1/2',
           store.isDark
-            ? 'bg-[#141C2F]/98 border-slate-700/90 text-slate-200 shadow-black/50'
-            : 'bg-slate-900/95 border-slate-800 text-slate-100 shadow-slate-900/25'
+            ? 'bg-[#141C2F]/98 border-slate-700/90 text-slate-200 shadow-xl shadow-black/50'
+            : 'bg-white/98 border-slate-200/95 text-slate-700 shadow-[0_10px_30px_-5px_rgba(15,23,42,0.14),0_4px_12px_-2px_rgba(79,70,229,0.08)]'
         ]"
       >
         <div
           v-if="title"
-          class="text-[12px] font-semibold text-indigo-300 mb-1 flex items-center gap-1.5"
+          class="text-[12px] font-semibold mb-1 flex items-center gap-1.5"
+          :class="store.isDark ? 'text-indigo-300' : 'text-indigo-600'"
         >
-          <span class="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0"></span>
+          <span
+            class="w-1.5 h-1.5 rounded-full shrink-0"
+            :class="store.isDark ? 'bg-indigo-400' : 'bg-indigo-500'"
+          ></span>
           <span>{{ title }}</span>
         </div>
-        <div class="text-[11.5px] text-slate-200/95 whitespace-normal">
+        <div
+          class="text-[11.5px] whitespace-normal"
+          :class="store.isDark ? 'text-slate-200/95' : 'text-slate-600'"
+        >
           {{ content }}
         </div>
         <div
           v-if="tip"
-          class="mt-1.5 pt-1.5 border-t border-slate-700/70 text-[10.5px] text-slate-400 font-mono whitespace-normal"
+          class="mt-2 pt-1.5 border-t text-[10.5px] font-mono whitespace-normal"
+          :class="
+            store.isDark
+              ? 'border-slate-700/70 text-slate-400'
+              : 'border-slate-100 text-slate-400'
+          "
         >
           {{ tip }}
         </div>
