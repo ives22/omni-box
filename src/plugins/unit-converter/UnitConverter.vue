@@ -1426,14 +1426,14 @@ onUnmounted(() => {
               : 'bg-white border-slate-200/85 shadow-[0_1px_3px_rgba(15,23,42,0.03)]'
           "
         >
-          <div class="flex items-center gap-2.5">
-            <span class="text-xs font-bold whitespace-nowrap">{{ activeCategory.label }}:</span>
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="text-xs font-bold whitespace-nowrap shrink-0">{{ activeCategory.shortLabel }}:</span>
             <input
               v-model="unitInputVal"
               type="text"
               placeholder="输入待换算数值..."
               aria-label="输入待换算数值"
-              class="w-[200px] h-[34px] px-3 rounded-xl border font-mono text-sm font-bold outline-none"
+              class="w-[150px] shrink-0 h-[34px] px-3 rounded-xl border font-mono text-sm font-bold outline-none"
               :class="
                 store.isDark
                   ? 'bg-slate-950 border-slate-700 text-white focus:border-indigo-500'
@@ -1443,7 +1443,7 @@ onUnmounted(() => {
             <select
               v-model="unitSourceId"
               aria-label="选择基准源单位"
-              class="h-[34px] px-3 rounded-xl border text-xs font-semibold outline-none cursor-pointer"
+              class="h-[34px] max-w-[175px] shrink-0 px-2.5 rounded-xl border text-xs font-semibold outline-none cursor-pointer truncate"
               :class="
                 store.isDark
                   ? 'bg-slate-950 border-slate-700 text-indigo-300'
@@ -1451,14 +1451,14 @@ onUnmounted(() => {
               "
             >
               <option v-for="u in activeCategory.units" :key="u.id" :value="u.id">
-                {{ u.name }} ({{ u.symbol }})
+                {{ u.name.replace(/\s*\([^)]*\)/g, '') }} ({{ u.symbol }})
               </option>
             </select>
 
             <!-- 1024 vs 1000 Radix Switcher exclusively for Data Storage -->
             <div
               v-if="activeCategory.id === 'data'"
-              class="flex items-center gap-1 p-0.5 rounded-xl border ml-auto"
+              class="flex items-center gap-1 p-0.5 rounded-xl border ml-auto shrink-0"
               :class="
                 store.isDark
                   ? 'bg-slate-950 border-slate-800'
@@ -1467,7 +1467,7 @@ onUnmounted(() => {
             >
               <button
                 type="button"
-                class="px-2.5 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap cursor-pointer transition-all"
+                class="px-2 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap cursor-pointer transition-all"
                 :class="
                   dataStorageRadix === 1024
                     ? store.isDark
@@ -1477,11 +1477,11 @@ onUnmounted(() => {
                 "
                 @click="dataStorageRadix = 1024"
               >
-                1024 进制 (编程 / Win / 内存)
+                1024 进制 (Win/内存/编程)
               </button>
               <button
                 type="button"
-                class="px-2.5 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap cursor-pointer transition-all"
+                class="px-2 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap cursor-pointer transition-all"
                 :class="
                   dataStorageRadix === 1000
                     ? store.isDark
@@ -1491,13 +1491,13 @@ onUnmounted(() => {
                 "
                 @click="dataStorageRadix = 1000"
               >
-                1000 进制 (硬盘厂商 / macOS)
+                1000 进制 (macOS/硬盘)
               </button>
             </div>
 
             <span
               v-else
-              class="text-[11px] text-slate-400 ml-auto hidden sm:inline"
+              class="text-[11px] text-slate-400 ml-auto truncate hidden sm:inline"
             >
               点击下方任意单位卡片可直接复制结果
             </span>
