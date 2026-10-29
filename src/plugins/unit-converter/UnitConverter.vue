@@ -41,6 +41,7 @@ function isCopied(keyId: string): boolean {
 // ============================================================================
 type UnitCategoryId =
   | 'data'
+  | 'bandwidth'
   | 'length'
   | 'area'
   | 'volume'
@@ -51,6 +52,9 @@ type UnitCategoryId =
   | 'energy'
   | 'pressure'
   | 'base_rmb'
+
+// Default to 1024 binary standard for data storage (1 GB = 1024 MB = 1,073,741,824 B)
+const dataStorageRadix = ref<1024 | 1000>(1024)
 
 interface UnitDef {
   id: string
@@ -74,55 +78,54 @@ interface CategoryDef {
 const UNIT_CATEGORIES: CategoryDef[] = [
   {
     id: 'data',
-    label: '数据存储与带宽',
+    label: '数据存储容量',
     shortLabel: '数据存储',
     defaultUnit: 'GB',
     defaultVal: '1',
     presets: [
       { label: '1 GB', val: '1', unit: 'GB' },
       { label: '1 TB 硬盘', val: '1', unit: 'TB' },
-      { label: '512 GB', val: '512', unit: 'GB' },
-      { label: '1000 Mbps 宽带', val: '1000', unit: 'Mb' },
-      { label: '16 GiB 内存', val: '16', unit: 'GiB' }
+      { label: '512 GB 硬盘', val: '512', unit: 'GB' },
+      { label: '256 GB', val: '256', unit: 'GB' },
+      { label: '16 GB 内存', val: '16', unit: 'GB' },
+      { label: '64 MB 配置', val: '64', unit: 'MB' }
     ],
-    // Base unit: Byte (B)
+    // Base unit: Byte (B); factors for KB..EB are dynamically computed using dataStorageRadix (1024 or 1000)
     units: [
-      { id: 'B', name: '字节 (Byte)', symbol: 'B', group: '十进制标准 (SI)', factor: 1 },
-      { id: 'KB', name: '千字节', symbol: 'KB', group: '十进制标准 (SI)', factor: 1e3 },
-      { id: 'MB', name: '兆字节', symbol: 'MB', group: '十进制标准 (SI)', factor: 1e6 },
-      { id: 'GB', name: '吉字节', symbol: 'GB', group: '十进制标准 (SI)', factor: 1e9 },
-      { id: 'TB', name: '太字节', symbol: 'TB', group: '十进制标准 (SI)', factor: 1e12 },
-      { id: 'PB', name: '拍字节', symbol: 'PB', group: '十进制标准 (SI)', factor: 1e15 },
-      { id: 'KiB', name: '二进制千字节', symbol: 'KiB', group: '二进制标准 (IEC)', factor: 1024 },
-      {
-        id: 'MiB',
-        name: '二进制兆字节',
-        symbol: 'MiB',
-        group: '二进制标准 (IEC)',
-        factor: Math.pow(1024, 2)
-      },
-      {
-        id: 'GiB',
-        name: '二进制吉字节 (系统显示)',
-        symbol: 'GiB',
-        group: '二进制标准 (IEC)',
-        factor: Math.pow(1024, 3)
-      },
-      {
-        id: 'TiB',
-        name: '二进制太字节 (真实容量)',
-        symbol: 'TiB',
-        group: '二进制标准 (IEC)',
-        factor: Math.pow(1024, 4)
-      },
-      { id: 'bit', name: '比特 / 位 (bit)', symbol: 'b', group: '比特与带宽折算', factor: 0.125 },
-      {
-        id: 'Mb',
-        name: '兆比特 (Mbps 对应每秒下载)',
-        symbol: 'Mbit',
-        group: '比特与带宽折算',
-        factor: 125000
-      }
+      { id: 'bit', name: '比特 / 位 (bit)', symbol: 'b', group: '1 Byte = 8 bits', factor: 0.125 },
+      { id: 'B', name: '字节 (Byte)', symbol: 'B', group: '基础字节单元', factor: 1 },
+      { id: 'KB', name: '千字节 (Kilobyte)', symbol: 'KB', group: '1024 B', factor: 1024 },
+      { id: 'MB', name: '兆字节 (Megabyte)', symbol: 'MB', group: '1024 KB', factor: Math.pow(1024, 2) },
+      { id: 'GB', name: '吉字节 (Gigabyte)', symbol: 'GB', group: '1024 MB', factor: Math.pow(1024, 3) },
+      { id: 'TB', name: '太字节 (Terabyte)', symbol: 'TB', group: '1024 GB', factor: Math.pow(1024, 4) },
+      { id: 'PB', name: '拍字节 (Petabyte)', symbol: 'PB', group: '1024 TB', factor: Math.pow(1024, 5) },
+      { id: 'EB', name: '艾字节 (Exabyte)', symbol: 'EB', group: '1024 PB', factor: Math.pow(1024, 6) }
+    ]
+  },
+  {
+    id: 'bandwidth',
+    label: '网络宽带与下载速率',
+    shortLabel: '网络带宽',
+    defaultUnit: 'Mbps',
+    defaultVal: '1000',
+    presets: [
+      { label: '100 Mbps 百兆宽带', val: '100', unit: 'Mbps' },
+      { label: '300 Mbps 家用宽带', val: '300', unit: 'Mbps' },
+      { label: '500 Mbps 宽带', val: '500', unit: 'Mbps' },
+      { label: '1000 Mbps 千兆宽带', val: '1000', unit: 'Mbps' },
+      { label: '2.5 Gbps 网卡', val: '2.5', unit: 'Gbps' },
+      { label: '10 Gbps 万兆网卡', val: '10', unit: 'Gbps' }
+    ],
+    // Base unit: bit per second (bps)
+    units: [
+      { id: 'Mbps', name: '兆比特/秒 (宽带兆数)', symbol: 'Mbps', group: '运营商宽带标称 (bit/s)', factor: 1e6 },
+      { id: 'Gbps', name: '吉比特/秒 (千兆/万兆)', symbol: 'Gbps', group: '运营商宽带标称 (bit/s)', factor: 1e9 },
+      { id: 'Kbps', name: '千比特/秒', symbol: 'Kbps', group: '运营商宽带标称 (bit/s)', factor: 1e3 },
+      { id: 'bps', name: '比特/秒', symbol: 'bps', group: '运营商宽带标称 (bit/s)', factor: 1 },
+      { id: 'MBs', name: '兆字节/秒 (实际下载速度)', symbol: 'MB/s', group: '软件实际下载速度 (Byte/s)', factor: 8e6 },
+      { id: 'GBs', name: '吉字节/秒', symbol: 'GB/s', group: '软件实际下载速度 (Byte/s)', factor: 8e9 },
+      { id: 'KBs', name: '千字节/秒', symbol: 'KB/s', group: '软件实际下载速度 (Byte/s)', factor: 8e3 },
+      { id: 'Bs', name: '字节/秒', symbol: 'B/s', group: '软件实际下载速度 (Byte/s)', factor: 8 }
     ]
   },
   {
@@ -460,6 +463,30 @@ function convertTemperature(val: number, fromId: string, toId: string): number {
   return c
 }
 
+function getDataUnitDynamicFactor(unitId: string, radix: 1024 | 1000): { factor: number; desc: string } {
+  const r = radix
+  switch (unitId) {
+    case 'bit':
+      return { factor: 0.125, desc: '1 Byte = 8 bits' }
+    case 'B':
+      return { factor: 1, desc: '基础字节单元' }
+    case 'KB':
+      return { factor: Math.pow(r, 1), desc: `1 KB = ${r} B` }
+    case 'MB':
+      return { factor: Math.pow(r, 2), desc: `1 MB = ${r} KB` }
+    case 'GB':
+      return { factor: Math.pow(r, 3), desc: `1 GB = ${r} MB` }
+    case 'TB':
+      return { factor: Math.pow(r, 4), desc: `1 TB = ${r} GB` }
+    case 'PB':
+      return { factor: Math.pow(r, 5), desc: `1 PB = ${r} TB` }
+    case 'EB':
+      return { factor: Math.pow(r, 6), desc: `1 EB = ${r} PB` }
+    default:
+      return { factor: 1, desc: '' }
+  }
+}
+
 const computedUnitMatrix = computed(() => {
   const cat = activeCategory.value
   if (cat.id === 'base_rmb') return []
@@ -467,27 +494,58 @@ const computedUnitMatrix = computed(() => {
   const isValid = unitInputVal.value.trim() !== '' && !Number.isNaN(rawNum)
 
   const srcUnit = cat.units.find((u) => u.id === unitSourceId.value) || cat.units[0]
-  const baseValue = isValid ? rawNum * srcUnit.factor : NaN
+  const srcFactor =
+    cat.id === 'data'
+      ? getDataUnitDynamicFactor(srcUnit.id, dataStorageRadix.value).factor
+      : srcUnit.factor
+  const baseValue = isValid ? rawNum * srcFactor : NaN
 
   return cat.units.map((u) => {
+    const uDynamic =
+      cat.id === 'data'
+        ? getDataUnitDynamicFactor(u.id, dataStorageRadix.value)
+        : { factor: u.factor, desc: u.group }
+
     if (!isValid) {
-      return { ...u, formatted: '--', raw: '' }
+      return { ...u, group: uDynamic.desc, formatted: '--', raw: '' }
     }
     let targetVal = 0
     if (cat.id === 'temperature') {
       targetVal = convertTemperature(rawNum, srcUnit.id, u.id)
     } else {
-      targetVal = baseValue / u.factor
+      targetVal = baseValue / uDynamic.factor
     }
     return {
       ...u,
+      group: uDynamic.desc,
       formatted: formatSmartNumber(targetVal),
       raw: Number(targetVal.toPrecision(10)).toString()
     }
   })
 })
 
-// Contextual Insight Banner for Data / Time / Speed
+// Real-time Disk Capacity Shrinkage Comparison (Manufacturer 1000 vs OS 1024)
+const diskCapacityShrinkInsight = computed(() => {
+  if (activeCategory.value.id !== 'data') return null
+  const rawNum = Number(unitInputVal.value.replace(/,/g, '').trim())
+  if (!unitInputVal.value.trim() || Number.isNaN(rawNum) || rawNum <= 0) return null
+  const powerMap: Record<string, number> = { KB: 1, MB: 2, GB: 3, TB: 4, PB: 5, EB: 6 }
+  const p = powerMap[unitSourceId.value]
+  if (!p) return null
+
+  const vendorBytes = rawNum * Math.pow(1000, p)
+  const osActualVal = vendorBytes / Math.pow(1024, p)
+  const osFormatted = Number(osActualVal.toFixed(2)).toLocaleString('en-US')
+  const ratioPct = ((osActualVal / rawNum) * 100).toFixed(2)
+  return {
+    vendorLabel: `${rawNum} ${unitSourceId.value}`,
+    osValue: `${osFormatted} ${unitSourceId.value}`,
+    osRaw: osActualVal.toFixed(2),
+    text: `硬盘标称折算：厂商按 1000 进制标称 ${rawNum} ${unitSourceId.value} 时，在 Windows (1024 进制) 中实际显示为 ${osFormatted} ${unitSourceId.value}（约为标称值的 ${ratioPct}%）`
+  }
+})
+
+// Contextual Insight Banner for Bandwidth / Time / Speed
 const categoryInsightBanner = computed(() => {
   const cat = activeCategory.value
   const rawNum = Number(unitInputVal.value.replace(/,/g, '').trim())
@@ -495,17 +553,20 @@ const categoryInsightBanner = computed(() => {
 
   const srcUnit = cat.units.find((u) => u.id === unitSourceId.value) || cat.units[0]
 
-  if (cat.id === 'data') {
-    const bytes = rawNum * srcUnit.factor
-    const formatDuration = (sec: number) => {
-      if (sec < 1) return `${(sec * 1000).toFixed(0)} 毫秒`
-      if (sec < 60) return `${sec.toFixed(1)} 秒`
-      if (sec < 3600) return `${Math.floor(sec / 60)}分 ${Math.round(sec % 60)}秒`
-      return `${(sec / 3600).toFixed(1)} 小时`
+  if (cat.id === 'bandwidth') {
+    const bps = rawNum * srcUnit.factor
+    const bytesPerSec = bps / 8
+    if (bytesPerSec > 0) {
+      const fmtSec = (sec: number) => {
+        if (sec < 1) return `${(sec * 1000).toFixed(0)}毫秒`
+        if (sec < 60) return `${sec.toFixed(1)}秒`
+        if (sec < 3600) return `${Math.floor(sec / 60)}分${Math.round(sec % 60)}秒`
+        return `${(sec / 3600).toFixed(1)}小时`
+      }
+      const sec1G = Math.pow(1024, 3) / bytesPerSec
+      const sec10G = (10 * Math.pow(1024, 3)) / bytesPerSec
+      return `理论下载耗时：在该速率下，下载 1 GB 文件约需 ${fmtSec(sec1G)} · 下载 10 GB 文件约需 ${fmtSec(sec10G)}`
     }
-    const sec100M = bytes / (100 * 125000)
-    const sec1000M = bytes / (1000 * 125000)
-    return `传输耗时速算：百兆宽带 (100Mbps) 约需 ${formatDuration(sec100M)} · 千兆宽带 (1000Mbps) 约需 ${formatDuration(sec1000M)}`
   }
 
   if (cat.id === 'time') {
@@ -1122,8 +1183,9 @@ function applyExternalPayload(raw: string) {
       mb: { cat: 'data', unit: 'MB' },
       gb: { cat: 'data', unit: 'GB' },
       tb: { cat: 'data', unit: 'TB' },
-      gib: { cat: 'data', unit: 'GiB' },
-      mbps: { cat: 'data', unit: 'Mb' },
+      gib: { cat: 'data', unit: 'GB' },
+      mbps: { cat: 'bandwidth', unit: 'Mbps' },
+      gbps: { cat: 'bandwidth', unit: 'Gbps' },
       km: { cat: 'length', unit: 'km' },
       m: { cat: 'length', unit: 'm' },
       米: { cat: 'length', unit: 'm' },
@@ -1393,8 +1455,79 @@ onUnmounted(() => {
               </option>
             </select>
 
-            <span class="text-[11px] text-slate-400 ml-auto hidden sm:inline">
+            <!-- 1024 vs 1000 Radix Switcher exclusively for Data Storage -->
+            <div
+              v-if="activeCategory.id === 'data'"
+              class="flex items-center gap-1 p-0.5 rounded-xl border ml-auto"
+              :class="
+                store.isDark
+                  ? 'bg-slate-950 border-slate-800'
+                  : 'bg-slate-100 border-slate-200/80'
+              "
+            >
+              <button
+                type="button"
+                class="px-2.5 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap cursor-pointer transition-all"
+                :class="
+                  dataStorageRadix === 1024
+                    ? store.isDark
+                      ? 'bg-indigo-500/25 text-indigo-300'
+                      : 'bg-white text-indigo-600 shadow-xs'
+                    : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+                "
+                @click="dataStorageRadix = 1024"
+              >
+                1024 进制 (编程 / Win / 内存)
+              </button>
+              <button
+                type="button"
+                class="px-2.5 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap cursor-pointer transition-all"
+                :class="
+                  dataStorageRadix === 1000
+                    ? store.isDark
+                      ? 'bg-indigo-500/25 text-indigo-300'
+                      : 'bg-white text-indigo-600 shadow-xs'
+                    : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
+                "
+                @click="dataStorageRadix = 1000"
+              >
+                1000 进制 (硬盘厂商 / macOS)
+              </button>
+            </div>
+
+            <span
+              v-else
+              class="text-[11px] text-slate-400 ml-auto hidden sm:inline"
+            >
               点击下方任意单位卡片可直接复制结果
+            </span>
+          </div>
+
+          <!-- Disk Capacity Shrinkage Insight Banner (1000 Vendor vs 1024 OS) -->
+          <div
+            v-if="diskCapacityShrinkInsight"
+            class="px-3 py-1.5 rounded-xl border text-[11.5px] font-medium flex items-center justify-between gap-2 cursor-pointer transition-colors"
+            :class="[
+              isCopied('disk-shrink-val')
+                ? 'border-emerald-500/70 bg-emerald-500/10 text-emerald-400'
+                : store.isDark
+                  ? 'bg-indigo-500/10 border-indigo-500/25 text-indigo-300 hover:border-indigo-500/45'
+                  : 'bg-indigo-50/70 border-indigo-200/70 text-indigo-700 hover:border-indigo-300'
+            ]"
+            @click="
+              copyField(
+                diskCapacityShrinkInsight.osRaw,
+                `硬盘实际容量 (${diskCapacityShrinkInsight.osValue})`,
+                'disk-shrink-val'
+              )
+            "
+          >
+            <div class="flex items-center gap-2 min-w-0">
+              <IconRenderer name="Database" :size="13" class-name="shrink-0" />
+              <span class="truncate">{{ diskCapacityShrinkInsight.text }}</span>
+            </div>
+            <span class="text-[10.5px] whitespace-nowrap shrink-0 underline opacity-80">
+              {{ isCopied('disk-shrink-val') ? '✓ 已复制' : '复制实际值' }}
             </span>
           </div>
 
