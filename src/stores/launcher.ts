@@ -539,6 +539,54 @@ export const useLauncherStore = defineStore('launcher', () => {
       })
     }
 
+    // Smart Unit / Timestamp / Color / RMB Uppercase detection -> Direct jump to Unit & Format Studio
+    if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(trimmed)) {
+      finalResults.push({
+        id: 'quick:unit-converter',
+        title: `颜色格式转换 (${trimmed.toUpperCase()})`,
+        subtitle: '打开「换算与格式工作台」查看 RGB / RGBA / HSL / CMYK / CSS 变量色值',
+        category: 'plugin',
+        icon: 'ArrowLeftRight',
+        keywords: ['color', 'hex', 'rgb'],
+        action_payload: trimmed,
+        score: 9998,
+        match_type: '色值识别',
+        badge: '颜色转换'
+      })
+    } else if (/^1[5-9]\d{8}(\d{3})?$/.test(trimmed)) {
+      const msVal = trimmed.length === 10 ? Number(trimmed) * 1000 : Number(trimmed)
+      const dtStr = new Date(msVal).toLocaleString('zh-CN', { hour12: false })
+      finalResults.push({
+        id: 'quick:unit-converter',
+        title: `时间戳转换：${trimmed} → ${dtStr}`,
+        subtitle: '打开「换算与格式工作台」查看 ISO8601、当天零点/末刻与全球多时区对照',
+        category: 'plugin',
+        icon: 'ArrowLeftRight',
+        keywords: ['timestamp', 'time'],
+        action_payload: trimmed,
+        score: 9998,
+        match_type: '时间戳识别',
+        badge: '时间转换'
+      })
+    } else if (
+      /^-?\d+(\.\d+)?\s*(b|kb|mb|gb|tb|gib|mbps|km|m|cm|mm|in|ft|米|厘米|英寸|英尺|尺|里|亩|坪|平方米|公顷|l|ml|升|毫升|gal|kg|g|公斤|克|斤|两|lb|磅|oz|盎司|c|f|摄氏度|华氏度|kj|kcal|千焦|大卡|bar|psi|kpa|大写)$/i.test(
+        trimmed
+      )
+    ) {
+      finalResults.push({
+        id: 'quick:unit-converter',
+        title: `全量单位换算 / 财务大写：${trimmed}`,
+        subtitle: '打开「换算与格式工作台」同屏查看该维度下所有公制、市制、英制单位换算矩阵',
+        category: 'plugin',
+        icon: 'ArrowLeftRight',
+        keywords: ['unit', 'convert'],
+        action_payload: trimmed,
+        score: 9998,
+        match_type: '单位识别',
+        badge: '换算直达'
+      })
+    }
+
     const quickJson = tryDetectQuickJson(q)
     if (quickJson) finalResults.push(quickJson)
 
@@ -683,6 +731,13 @@ export const useLauncherStore = defineStore('launcher', () => {
       return
     }
 
+    if (item.id === 'quick:unit-converter') {
+      pluginInitialPayload.value = item.action_payload
+      openPlugin('unit-converter')
+      searchQuery.value = ''
+      return
+    }
+
     if (item.category === 'totp' && item.totpCode) {
       await navigator.clipboard.writeText(item.totpCode)
       showToast(`已复制 ${item.title} 验证码：${item.totpCode}`)
@@ -746,6 +801,7 @@ export const useLauncherStore = defineStore('launcher', () => {
       'authenticator': '按平台名称、账户邮箱或分类筛选 2FA 令牌...',
       'password-vault': '搜索密码本中的网站、账号、备注...',
       'ip-studio': '输入任意公网 IP 查询归属地，或输入 CIDR (如 192.168.1.0/24) 划分子网...',
+      'unit-converter': '输入数值+单位 (如 500g / 100亩 / 1024mb)、时间戳或 #HEX 色值直接换算...',
       'utools-hub': '搜索已挂载的 uTools 扩展或输入 plugin.json 配置...',
       'utools-runner': 'uTools 兼容沙箱子输入框 (window.utools.setSubInput)...',
       'user-center': '在个人中心搜索本机应用或配置项...'
@@ -809,6 +865,7 @@ export const useLauncherStore = defineStore('launcher', () => {
         'authenticator': '2FA 验证码',
         'password-vault': '密码本',
         'ip-studio': 'IP 与网络工作台',
+        'unit-converter': '换算与格式工作台',
         'utools-hub': 'uTools 插件中心',
         'user-center': '个人中心与设置'
       }
@@ -927,6 +984,7 @@ export const useLauncherStore = defineStore('launcher', () => {
       'authenticator': { id: 'authenticator', name: '2FA 验证码', icon: 'ShieldCheck', badge: 'TOTP 2FA' },
       'password-vault': { id: 'password-vault', name: '密码本', icon: 'KeyRound', badge: 'AES-256 Vault' },
       'ip-studio': { id: 'ip-studio', name: 'IP 与网络工作台', icon: 'Globe', badge: 'IP & CIDR Studio' },
+      'unit-converter': { id: 'unit-converter', name: '换算与格式工作台', icon: 'ArrowLeftRight', badge: 'Unit & Format' },
       'utools-hub': { id: 'utools-hub', name: 'uTools 插件中心', icon: 'Blocks', badge: '无限制挂载' },
       'user-center': { id: 'user-center', name: '个人中心与设置', icon: 'SlidersHorizontal', badge: 'Control Hub' }
     }
