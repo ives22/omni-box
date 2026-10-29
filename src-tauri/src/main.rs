@@ -1842,7 +1842,44 @@ fn execute_system_command(cmd_id: String) -> Result<String, String> {
                 Ok("已切换访达隐藏文件显示状态".to_string())
             }
             "sys:copy-local-ip" => {
-                // Fast & interface-agnostic local IPv4 detection via UDP routing table lookup
+                // 1. Check default route physical interface first (excluding VPN/tunnel interfaces like utun/ppp/ipsec)
+                if let Ok(out) = Command::new("route").args(["-n", "get", "default"]).output() {
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    for line in text.lines() {
+                        if let Some(rest) = line.trim().strip_prefix("interface:") {
+                            let iface = rest.trim();
+                            let is_vpn_or_virtual = iface.starts_with("utun")
+                                || iface.starts_with("tun")
+                                || iface.starts_with("tap")
+                                || iface.starts_with("ppp")
+                                || iface.starts_with("ipsec")
+                                || iface.starts_with("bridge")
+                                || iface.starts_with("gif")
+                                || iface.starts_with("stf");
+                            if !iface.is_empty() && !is_vpn_or_virtual {
+                                if let Ok(ip_out) =
+                                    Command::new("ipconfig").args(["getifaddr", iface]).output()
+                                {
+                                    let ip =
+                                        String::from_utf8_lossy(&ip_out.stdout).trim().to_string();
+                                    if !ip.is_empty() && ip != "127.0.0.1" {
+                                        return Ok(ip);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // 2. Fallback to physical hardware interfaces (en0 Wi-Fi / en1..en8 Ethernet) so VPN utun IP is never picked
+                for iface in ["en0", "en1", "en2", "en3", "en4", "en5", "en6", "en7", "en8"] {
+                    if let Ok(out) = Command::new("ipconfig").args(["getifaddr", iface]).output() {
+                        let ip = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                        if !ip.is_empty() && ip != "127.0.0.1" {
+                            return Ok(ip);
+                        }
+                    }
+                }
+                // 3. Last resort fallback via UDP socket
                 if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
                     if sock.connect("8.8.8.8:80").is_ok() {
                         if let Ok(local_addr) = sock.local_addr() {
@@ -1850,14 +1887,6 @@ fn execute_system_command(cmd_id: String) -> Result<String, String> {
                             if !ip_str.is_empty() && ip_str != "0.0.0.0" && ip_str != "127.0.0.1" {
                                 return Ok(ip_str);
                             }
-                        }
-                    }
-                }
-                for iface in ["en0", "en1", "en2", "en3"] {
-                    if let Ok(out) = Command::new("ipconfig").args(["getifaddr", iface]).output() {
-                        let ip = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                        if !ip.is_empty() {
-                            return Ok(ip);
                         }
                     }
                 }
@@ -2276,7 +2305,10 @@ async fn get_local_network_overview() -> Result<LocalNetworkOverview, String> {
                             ("other".to_string(), format!("网络接口 ({})", name))
                         };
 
-                        let is_primary = default_iface.as_deref() == Some(name.as_str());
+                        // Never mark VPN (`utun`/`ppp`/`tun`) or virtual bridge as the primary LAN egress interface
+                        let is_primary = default_iface.as_deref() == Some(name.as_str())
+                            && kind != "vpn"
+                            && kind != "bridge";
                         let cidr_notation = format!("{}/{}", ipv4, *prefix);
                         list.push(LocalNetworkInterface {
                             name,

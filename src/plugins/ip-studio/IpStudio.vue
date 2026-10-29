@@ -68,6 +68,9 @@ async function loadLocalNetwork() {
   try {
     const res = await fetchLocalNetworkOverview()
     localNet.value = res
+    if (res.primary_ipv4 && res.primary_ipv4 !== '127.0.0.1') {
+      store.cachedLocalIp = res.primary_ipv4
+    }
     // If CIDR input is still default, sync with actual primary interface IP & prefix
     if (cidrIpInput.value === '192.168.1.100' && res.primary_ipv4 && res.primary_ipv4 !== '127.0.0.1') {
       cidrIpInput.value = res.primary_ipv4
@@ -598,7 +601,7 @@ onMounted(() => {
 
             <!-- Main Local IPv4 Display + Copy Button -->
             <div
-              class="flex items-center justify-between p-2.5 rounded-xl border transition-colors"
+              class="flex items-center justify-between px-3 py-2.5 rounded-xl border transition-colors"
               :class="[
                 isCopied('primary-local-ip')
                   ? 'border-emerald-500/70 bg-emerald-500/10'
@@ -608,8 +611,7 @@ onMounted(() => {
               ]"
             >
               <div class="min-w-0">
-                <div class="text-[10.5px] text-slate-400">局域网 IPv4</div>
-                <div class="font-mono text-xl font-bold tracking-tight mt-0.5 select-text">
+                <div class="font-mono text-xl font-bold tracking-tight select-text">
                   {{ localNet?.primary_ipv4 || '正在探测...' }}
                 </div>
               </div>
@@ -789,7 +791,7 @@ onMounted(() => {
 
             <!-- Main Public IPv4 Display + Copy Button -->
             <div
-              class="flex items-center justify-between p-2.5 rounded-xl border transition-colors"
+              class="flex items-center justify-between px-3 py-2.5 rounded-xl border transition-colors"
               :class="[
                 isCopied('public-exit-ip')
                   ? 'border-emerald-500/70 bg-emerald-500/10'
@@ -799,8 +801,7 @@ onMounted(() => {
               ]"
             >
               <div class="min-w-0">
-                <div class="text-[10.5px] text-slate-400">公网出口 IP</div>
-                <div class="flex items-center gap-2 mt-0.5">
+                <div class="flex items-center gap-2">
                   <span v-if="publicGeo?.flagEmoji" class="text-lg leading-none">
                     {{ publicGeo.flagEmoji }}
                   </span>

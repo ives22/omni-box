@@ -483,21 +483,29 @@ export const useLauncherStore = defineStore('launcher', () => {
     )
 
     // Enrich `cmd:copy-local-ip` and `plugin:ip-studio` with live local IPv4 address so typing `ip` shows the IP right in the row
+    let hasIpItem = false
     for (const item of matched) {
       if (item.id === 'cmd:copy-local-ip' || item.id === 'plugin:ip-studio') {
-        if (!cachedLocalIp.value) {
-          refreshLocalIp().then(() => {
-            if (searchQuery.value.trim().toLowerCase().includes('ip')) {
-              runSearch()
-            }
-          })
-        } else if (item.id === 'cmd:copy-local-ip') {
-          item.title = `查询并复制本机局域网 IP · ${cachedLocalIp.value}`
-          item.subtitle = `当前局域网 IPv4 地址：${cachedLocalIp.value} （按 Enter 立即复制到剪贴板）`
-        } else if (item.id === 'plugin:ip-studio') {
-          item.subtitle = `本机出口 IP: ${cachedLocalIp.value} · 查询公网出口 IP (GeoJS/时区/ASN)、多网卡路由与 CIDR 子网划分`
+        hasIpItem = true
+        if (cachedLocalIp.value) {
+          if (item.id === 'cmd:copy-local-ip') {
+            item.title = `查询并复制本机局域网 IP · ${cachedLocalIp.value}`
+            item.subtitle = `当前局域网 IPv4 地址：${cachedLocalIp.value} （按 Enter 立即复制到剪贴板）`
+          } else if (item.id === 'plugin:ip-studio') {
+            item.subtitle = `本机出口 IP: ${cachedLocalIp.value} · 查询公网出口 IP (GeoJS/时区/ASN)、多网卡路由与 CIDR 子网划分`
+          }
         }
       }
+    }
+    if (hasIpItem) {
+      const prevIp = cachedLocalIp.value
+      refreshLocalIp().then(() => {
+        if (cachedLocalIp.value && cachedLocalIp.value !== prevIp) {
+          if (searchQuery.value.trim().toLowerCase().includes('ip')) {
+            runSearch()
+          }
+        }
+      })
     }
 
     const finalResults: SearchResultItem[] = []
@@ -1051,6 +1059,7 @@ export const useLauncherStore = defineStore('launcher', () => {
     systemApps,
     totpEntries,
     totpLiveMap,
+    cachedLocalIp,
     externalPlugins,
     activeExternalPlugin,
     userSettings,
