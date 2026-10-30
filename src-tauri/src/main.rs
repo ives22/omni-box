@@ -3024,10 +3024,38 @@ fn setup_system_tray(
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn enforce_single_instance(is_silent_launch: bool) {
+    let my_pid = std::process::id().to_string();
+    if let Ok(out) = Command::new("pgrep").args(["-x", "omni-box"]).output() {
+        let text = String::from_utf8_lossy(&out.stdout);
+        let other_pids: Vec<&str> = text
+            .lines()
+            .map(|l| l.trim())
+            .filter(|p| !p.is_empty() && *p != my_pid)
+            .collect();
+
+        if !other_pids.is_empty() {
+            if is_silent_launch {
+                // Another instance is already running; exit silent autostart cleanly
+                std::process::exit(0);
+            } else {
+                // User explicitly launched OmniBox; terminate stale/previous instances so only 1 instance runs
+                for pid in other_pids {
+                    let _ = Command::new("kill").args(["-9", pid]).output();
+                }
+            }
+        }
+    }
+}
+
 fn main() {
     let is_silent_launch = std::env::args().any(|a| {
         a == "--silent" || a == "--minimized" || a == "--autostart" || a == "-s"
     });
+
+    #[cfg(target_os = "macos")]
+    enforce_single_instance(is_silent_launch);
 
     let app_data_dir = dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
