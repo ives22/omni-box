@@ -5,8 +5,10 @@ import {
   requestAiChatCompletion,
   kvGet,
   kvPut,
+  isTauriEnv,
   AiChatMessageInput
 } from '@/bridge/backend'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import IconRenderer from '@/components/IconRenderer.vue'
 
 export interface AiPromptRole {
@@ -171,8 +173,14 @@ const activeRoleId = ref<string>('general')
 
 const inputPrompt = ref('')
 const generatingSessionMap = ref<Record<string, boolean>>({})
+const streamingSessionDraftMap = ref<
+  Record<string, { content: string; reasoningContent?: string | null; model?: string }>
+>({})
 const isCurrentSessionGenerating = computed(() =>
   Boolean(activeSessionId.value && generatingSessionMap.value[activeSessionId.value])
+)
+const currentStreamingDraft = computed(() =>
+  activeSessionId.value ? streamingSessionDraftMap.value[activeSessionId.value] || null : null
 )
 const activeGeneratingCount = computed(
   () => Object.values(generatingSessionMap.value).filter(Boolean).length
@@ -570,7 +578,8 @@ async function sendMessage(overrideText?: string) {
       model,
       messages: historyMessages,
       temperature: store.userSettings.aiTemperature ?? 0.7,
-      proxyUrl
+      proxyUrl,
+      streamId: targetSessionId
     })
 
     assistantTurn = {
@@ -594,6 +603,7 @@ async function sendMessage(overrideText?: string) {
       isError: true
     }
   } finally {
+    delete streamingSessionDraftMap.value[targetSessionId]
     setSessionInflight(targetSessionId, null)
 
     // Append assistant turn to whichever session list is freshest (in-memory or KV storage across Cmd+D)
@@ -767,6 +777,7 @@ watch(
 )
 
 let inflightPollTimer: ReturnType<typeof setInterval> | null = null
+let unlistenStreamChunk: UnlistenFn | null = null
 
 async function reloadSessionsFromKvAndCheckInflight() {
   const savedSessions = await kvGet<AiChatSession[]>('ai-studio', 'sessions', [])
@@ -887,6 +898,35 @@ onMounted(async () => {
   }
 
   window.addEventListener('storage', handleStorageEvent)
+  if (isTauriEnv()) {
+    listen<{
+      streamId: string
+      content: string
+      reasoningContent?: string | null
+      model?: string
+    }>('ai-stream-chunk', (event) => {
+      const payload = event.payload
+      if (!payload || !payload.streamId) return
+      if (sessions.value.some((s) => s.id === payload.streamId)) {
+        generatingSessionMap.value[payload.streamId] = true
+        streamingSessionDraftMap.value = {
+          ...streamingSessionDraftMap.value,
+          [payload.streamId]: {
+            content: payload.content || '',
+            reasoningContent: payload.reasoningContent || null,
+            model: payload.model
+          }
+        }
+        if (activeSessionId.value === payload.streamId) {
+          scrollToBottom()
+        }
+      }
+    })
+      .then((fn) => {
+        unlistenStreamChunk = fn
+      })
+      .catch(() => {})
+  }
   inflightPollTimer = setInterval(() => {
     if (activeGeneratingCount.value > 0 || localStorage.getItem(INFLIGHT_STORAGE_KEY)) {
       reloadSessionsFromKvAndCheckInflight()
@@ -898,6 +938,10 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('storage', handleStorageEvent)
+  if (unlistenStreamChunk) {
+    unlistenStreamChunk()
+    unlistenStreamChunk = null
+  }
   if (inflightPollTimer) {
     clearInterval(inflightPollTimer)
     inflightPollTimer = null
@@ -1474,22 +1518,53 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- Generating Loading Indicator (Scoped to current active session only) -->
+          <!-- Live Streaming / Generating Indicator (Scoped to current active session only) -->
           <div
             v-if="isCurrentSessionGenerating"
-            class="p-3.5 rounded-2xl border flex items-center gap-2.5 text-xs text-slate-400"
+            class="p-3.5 rounded-2xl border space-y-2.5"
             :class="
               store.isDark
-                ? 'bg-[#121929]/80 border-slate-800'
-                : 'bg-white border-slate-200'
+                ? 'bg-[#121929]/90 border-indigo-500/35 text-slate-100'
+                : 'bg-white border-indigo-200 text-slate-800 shadow-xs'
             "
           >
-            <IconRenderer name="RefreshCw" :size="14" class-name="animate-spin text-indigo-400" />
-            <span>
-              正在请求
-              <strong class="text-indigo-400 font-mono">{{ store.userSettings.aiModelName }}</strong>
-              生成回答中...
-            </span>
+            <template
+              v-if="
+                currentStreamingDraft &&
+                (currentStreamingDraft.content || currentStreamingDraft.reasoningContent)
+              "
+            >
+              <div
+                v-if="currentStreamingDraft.reasoningContent"
+                class="rounded-xl border px-3 py-2 text-[11px] whitespace-pre-wrap font-mono leading-relaxed"
+                :class="
+                  store.isDark
+                    ? 'bg-slate-950/70 border-slate-800 text-slate-400'
+                    : 'bg-slate-50 border-slate-200/80 text-slate-600'
+                "
+              >
+                <div class="font-semibold text-indigo-400 mb-1 flex items-center gap-1">
+                  <IconRenderer name="Sparkles" :size="11" />
+                  <span>正在深度思考...</span>
+                </div>
+                {{ currentStreamingDraft.reasoningContent }}
+              </div>
+              <div class="text-xs leading-relaxed whitespace-pre-wrap break-words">
+                {{ currentStreamingDraft.content }}<span class="inline-block w-1.5 h-3.5 ml-0.5 align-middle bg-indigo-400 animate-pulse"></span>
+              </div>
+              <div class="pt-1 flex items-center gap-1.5 text-[10.5px] text-indigo-400 font-mono">
+                <IconRenderer name="RefreshCw" :size="11" class-name="animate-spin" />
+                <span>{{ currentStreamingDraft.model || store.userSettings.aiModelName }} 正在实时流式输出...</span>
+              </div>
+            </template>
+            <div v-else class="flex items-center gap-2.5 text-xs text-slate-400">
+              <IconRenderer name="RefreshCw" :size="14" class-name="animate-spin text-indigo-400" />
+              <span>
+                正在请求
+                <strong class="text-indigo-400 font-mono">{{ store.userSettings.aiModelName }}</strong>
+                建立流式通道生成回答中...
+              </span>
+            </div>
           </div>
         </template>
       </div>

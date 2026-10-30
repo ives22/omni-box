@@ -27,6 +27,7 @@ import {
   isTauriEnv
 } from '@/bridge/backend'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 
 const DEFAULT_TOTP_LIST: TotpEntry[] = [
   {
@@ -277,10 +278,34 @@ export const useLauncherStore = defineStore('launcher', () => {
   }
 
   let activeQuickAskSeq = 0
+  let quickAskListenerInstalled = false
+
+  function ensureQuickAskStreamListener() {
+    if (quickAskListenerInstalled || !isTauriEnv()) return
+    quickAskListenerInstalled = true
+    listen<{
+      streamId: string
+      content: string
+      reasoningContent?: string | null
+      model?: string
+    }>('ai-stream-chunk', (event) => {
+      const payload = event.payload
+      if (!payload || payload.streamId !== `quick-ask-${activeQuickAskSeq}`) return
+      if (!aiAnswerState.value) return
+      aiAnswerState.value = {
+        ...aiAnswerState.value,
+        answer: payload.content || aiAnswerState.value.answer,
+        reasoningContent: payload.reasoningContent || aiAnswerState.value.reasoningContent || null,
+        model: payload.model || aiAnswerState.value.model,
+        loading: false
+      }
+    }).catch(() => {})
+  }
 
   async function triggerAiQuickAsk(question: string, customSystemPrompt?: string) {
     const cleanQ = question.replace(/^(\?|？|ai\s+)/i, '').trim()
     if (!cleanQ) return
+    ensureQuickAskStreamListener()
     const seq = ++activeQuickAskSeq
     const provider = userSettings.value.aiProvider || 'OpenAI'
     const apiKey = (userSettings.value.aiApiKey || '').trim()
@@ -327,7 +352,8 @@ export const useLauncherStore = defineStore('launcher', () => {
           { role: 'user', content: cleanQ }
         ],
         temperature: userSettings.value.aiTemperature ?? 0.7,
-        proxyUrl
+        proxyUrl,
+        streamId: `quick-ask-${seq}`
       })
       if (seq !== activeQuickAskSeq || !aiAnswerState.value) return
       aiAnswerState.value = {

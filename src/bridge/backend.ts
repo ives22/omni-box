@@ -1424,6 +1424,7 @@ export async function requestAiChatCompletion(params: {
   messages: AiChatMessageInput[]
   temperature?: number
   proxyUrl?: string
+  streamId?: string
 }): Promise<AiChatCompletionResponse> {
   if (isTauriEnv()) {
     return await invoke<AiChatCompletionResponse>('ai_chat_completion', {
@@ -1433,7 +1434,8 @@ export async function requestAiChatCompletion(params: {
       model: params.model,
       messages: params.messages,
       temperature: params.temperature ?? 0.7,
-      proxyUrl: params.proxyUrl || null
+      proxyUrl: params.proxyUrl || null,
+      streamId: params.streamId || null
     })
   }
 

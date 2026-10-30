@@ -2731,6 +2731,7 @@ fn parse_ai_response_body(raw_body: &str, fallback_model: &str) -> Result<(Strin
         let mut combined_content = String::new();
         let mut combined_reasoning = String::new();
         let mut detected_model = fallback_model.to_string();
+        let mut stream_tokens: Option<u64> = None;
 
         for line in trimmed.lines() {
             let l = line.trim();
@@ -2748,6 +2749,9 @@ fn parse_ai_response_body(raw_body: &str, fallback_model: &str) -> Result<(Strin
                             detected_model = m.to_string();
                         }
                     }
+                    if let Some(tok) = val["usage"]["total_tokens"].as_u64() {
+                        stream_tokens = Some(tok);
+                    }
                     if let Some(choices) = val["choices"].as_array() {
                         if let Some(first) = choices.first() {
                             if let Some(c) = first["delta"]["content"]
@@ -2758,6 +2762,7 @@ fn parse_ai_response_body(raw_body: &str, fallback_model: &str) -> Result<(Strin
                             }
                             if let Some(r) = first["delta"]["reasoning_content"]
                                 .as_str()
+                                .or_else(|| first["delta"]["reasoning"].as_str())
                                 .or_else(|| first["message"]["reasoning_content"].as_str())
                             {
                                 combined_reasoning.push_str(r);
@@ -2774,7 +2779,7 @@ fn parse_ai_response_body(raw_body: &str, fallback_model: &str) -> Result<(Strin
             } else {
                 Some(combined_reasoning)
             };
-            return Ok((combined_content, r_opt, detected_model, None));
+            return Ok((combined_content, r_opt, detected_model, stream_tokens));
         }
     }
 
@@ -2881,9 +2886,12 @@ async fn ai_chat_completion(
     messages: Vec<AiChatMessageInput>,
     temperature: Option<f64>,
     proxy_url: Option<String>,
+    stream_id: Option<String>,
+    app_handle: AppHandle,
 ) -> Result<AiChatCompletionResponse, String> {
     tauri::async_runtime::spawn_blocking(move || -> Result<AiChatCompletionResponse, String> {
-        use std::io::Write;
+        use std::io::{BufRead, BufReader, Write};
+        use tauri::Emitter;
         let start = Instant::now();
         let clean_key = api_key.trim().to_string();
         let clean_base = base_url.trim().trim_end_matches('/').to_string();
@@ -2906,12 +2914,19 @@ async fn ai_chat_completion(
             "-s".to_string(),
             "-S".to_string(),
             "-L".to_string(),
+            "-N".to_string(),
+            "--connect-timeout".to_string(),
+            "15".to_string(),
+            "--speed-time".to_string(),
+            "45".to_string(),
+            "--speed-limit".to_string(),
+            "1".to_string(),
             "--max-time".to_string(),
-            "60".to_string(),
+            "240".to_string(),
             "-H".to_string(),
             "Content-Type: application/json".to_string(),
             "-H".to_string(),
-            "Accept: application/json, text/event-stream".to_string(),
+            "Accept: text/event-stream, application/json".to_string(),
             "-A".to_string(),
             "OmniBox-AI-Client/2.0".to_string(),
         ];
@@ -3000,7 +3015,9 @@ async fn ai_chat_completion(
             }
             (url, body_json.to_string())
         } else {
-            // OpenAI / DeepSeek / Ollama / Sub2API / OneAPI / Any OpenAI-compatible gateway
+            // OpenAI / DeepSeek / Ollama / Sub2API / OneAPI / Any OpenAI-compatible gateway:
+            // Always use `"stream": true` so gateways like Sub2API (`gpt-6.1-sol`) immediately flush SSE chunks
+            // instead of blocking with 0 bytes until timeout!
             let default_host = match provider.as_str() {
                 "DeepSeek" => "https://api.deepseek.com/v1",
                 "Ollama 本地模型" => "http://127.0.0.1:11434/v1",
@@ -3025,7 +3042,7 @@ async fn ai_chat_completion(
                 "model": clean_model,
                 "messages": oai_msgs,
                 "temperature": temp,
-                "stream": false
+                "stream": true
             });
             (url, body_json.to_string())
         };
@@ -3046,16 +3063,86 @@ async fn ai_chat_completion(
             let _ = stdin.write_all(payload_str.as_bytes());
         }
 
+        let mut raw_stdout = String::new();
+        let mut live_content = String::new();
+        let mut live_reasoning = String::new();
+        let mut live_model = clean_model.clone();
+        let mut last_emit = Instant::now();
+
+        if let Some(stdout) = child.stdout.take() {
+            let reader = BufReader::new(stdout);
+            for line_res in reader.lines() {
+                if let Ok(line) = line_res {
+                    raw_stdout.push_str(&line);
+                    raw_stdout.push('\n');
+
+                    let trimmed_line = line.trim();
+                    if let Some(rest) = trimmed_line.strip_prefix("data:") {
+                        let data_str = rest.trim();
+                        if data_str != "[DONE]" && !data_str.is_empty() {
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(data_str) {
+                                if let Some(m) = val["model"].as_str() {
+                                    if !m.is_empty() {
+                                        live_model = m.to_string();
+                                    }
+                                }
+                                let mut chunk_added = false;
+                                if let Some(choices) = val["choices"].as_array() {
+                                    if let Some(first) = choices.first() {
+                                        if let Some(c) = first["delta"]["content"]
+                                            .as_str()
+                                            .or_else(|| first["message"]["content"].as_str())
+                                        {
+                                            if !c.is_empty() {
+                                                live_content.push_str(c);
+                                                chunk_added = true;
+                                            }
+                                        }
+                                        if let Some(r) = first["delta"]["reasoning_content"]
+                                            .as_str()
+                                            .or_else(|| first["delta"]["reasoning"].as_str())
+                                            .or_else(|| first["message"]["reasoning_content"].as_str())
+                                        {
+                                            if !r.is_empty() {
+                                                live_reasoning.push_str(r);
+                                                chunk_added = true;
+                                            }
+                                        }
+                                    }
+                                }
+                                if chunk_added {
+                                    if let Some(ref sid) = stream_id {
+                                        if last_emit.elapsed().as_millis() >= 35 {
+                                            last_emit = Instant::now();
+                                            let _ = app_handle.emit(
+                                                "ai-stream-chunk",
+                                                serde_json::json!({
+                                                    "streamId": sid,
+                                                    "content": live_content,
+                                                    "reasoningContent": if live_reasoning.is_empty() { None } else { Some(&live_reasoning) },
+                                                    "model": live_model
+                                                }),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let out = child
             .wait_with_output()
             .map_err(|e| format!("等待 AI 响应失败: {}", e))?;
 
-        if !out.status.success() {
+        // Even if curl exited with non-zero (e.g. partial stream interrupted), if we already received valid SSE content, return it gracefully!
+        if !out.status.success() && live_content.is_empty() && live_reasoning.is_empty() {
             let err_str = String::from_utf8_lossy(&out.stderr).trim().to_string();
             return Err(format!("网络连接异常: {}", err_str));
         }
 
-        let raw_stdout = String::from_utf8_lossy(&out.stdout).to_string();
         let (content, reasoning_content, used_model, total_tokens) =
             parse_ai_response_body(&raw_stdout, &clean_model)?;
 
