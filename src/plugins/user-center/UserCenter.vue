@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useLauncherStore } from '@/stores/launcher'
 import {
   CORE_PLUGIN_ITEMS,
@@ -8,8 +8,10 @@ import {
   encryptVaultData,
   kvGet,
   kvPut,
-  revealPathInFinder
+  revealPathInFinder,
+  isTauriEnv
 } from '@/bridge/backend'
+import { invoke } from '@tauri-apps/api/core'
 import IconRenderer from '@/components/IconRenderer.vue'
 import OmniBoxLogo from '@/components/OmniBoxLogo.vue'
 import HelpTooltip from '@/components/HelpTooltip.vue'
@@ -412,6 +414,42 @@ async function triggerWebdavSync() {
   await store.saveUserSettings({ lastSyncAt: Date.now() })
   store.showToast('已将本地加密快照同步至 WebDAV 云端端点')
 }
+
+interface SystemIntegrationStatus {
+  installedInApplications: boolean
+  applicationsBundlePath: string
+  currentExecutablePath: string
+  isRunningFromApplications: boolean
+  launchAgentPlistPath: string
+  launchAgentConfigured: boolean
+  trayActive: boolean
+}
+
+const sysIntegration = ref<SystemIntegrationStatus>({
+  installedInApplications: false,
+  applicationsBundlePath: '/Applications/OmniBox.app',
+  currentExecutablePath: '',
+  isRunningFromApplications: false,
+  launchAgentPlistPath: '~/Library/LaunchAgents/com.omnibox.launcher.plist',
+  launchAgentConfigured: true,
+  trayActive: true
+})
+
+async function refreshSystemIntegrationStatus() {
+  if (!isTauriEnv()) return
+  try {
+    const res = await invoke<SystemIntegrationStatus>('get_system_integration_status')
+    if (res) {
+      sysIntegration.value = res
+    }
+  } catch {
+    // ignore
+  }
+}
+
+onMounted(() => {
+  refreshSystemIntegrationStatus()
+})
 </script>
 
 <template>
@@ -835,25 +873,90 @@ async function triggerWebdavSync() {
             </div>
           </section>
 
-          <!-- Section 4: 高级设置 -->
+          <!-- Section 4: 系统集成与高级设置 -->
           <section class="space-y-4">
             <h3
               class="text-[13px] font-semibold"
               :class="store.isDark ? 'text-indigo-400' : 'text-[#4E5BA6]'"
             >
-              高级设置
+              系统集成与高级设置
             </h3>
 
             <div class="space-y-4 pl-3">
-              <!-- 开机启动 -->
+              <!-- macOS 应用程序安装与右上角状态栏常驻概览 -->
+              <div
+                class="p-3 rounded-xl border text-xs flex items-center justify-between gap-3"
+                :class="
+                  store.isDark
+                    ? 'bg-slate-900/75 border-slate-800 text-slate-300'
+                    : 'bg-white border-slate-200/90 text-slate-700 shadow-2xs'
+                "
+              >
+                <div class="space-y-1 min-w-0">
+                  <div class="flex items-center gap-2 font-semibold">
+                    <span
+                      class="w-2 h-2 rounded-full shrink-0"
+                      :class="
+                        sysIntegration.installedInApplications
+                          ? 'bg-emerald-400'
+                          : 'bg-amber-400'
+                      "
+                    ></span>
+                    <span>
+                      {{
+                        sysIntegration.installedInApplications
+                          ? '已安装至系统应用程序 (/Applications/OmniBox.app)'
+                          : '当前运行于开发调试模式'
+                      }}
+                    </span>
+                    <span
+                      class="px-1.5 py-0.5 rounded text-[10px] font-mono border"
+                      :class="
+                        store.isDark
+                          ? 'bg-indigo-500/15 border-indigo-500/30 text-indigo-300'
+                          : 'bg-indigo-50 border-indigo-200 text-indigo-600'
+                      "
+                    >
+                      右上角菜单栏已常驻
+                    </span>
+                  </div>
+                  <div class="text-[11px] text-slate-400 truncate">
+                    点击屏幕右上角 OmniBox 图标可随时呼出主窗口、直达任意工作台、开启独立窗口或完全退出软件。
+                  </div>
+                </div>
+
+                <button
+                  v-if="sysIntegration.installedInApplications"
+                  type="button"
+                  class="px-2.5 py-1.5 rounded-lg border text-[11px] font-medium shrink-0 cursor-pointer transition-colors"
+                  :class="
+                    store.isDark
+                      ? 'bg-slate-800 border-slate-700 text-slate-200 hover:border-indigo-500'
+                      : 'bg-slate-50 border-slate-200 text-slate-700 hover:border-indigo-400'
+                  "
+                  @click="revealPathInFinder('/Applications/OmniBox.app')"
+                >
+                  在访达中查看
+                </button>
+              </div>
+
+              <!-- 开机自动静默启动 -->
               <div class="flex items-center justify-between">
-                <div class="text-[13px] font-medium">开机启动</div>
+                <div class="flex items-center gap-1.5 text-[13px] font-medium">
+                  <span>开机自动静默启动 (Launch at Login)</span>
+                  <HelpTooltip
+                    title="登录 macOS 时后台静默自启"
+                    content="开启后，每次开机登录系统时会自动在后台静默启动 OmniBox 并常驻右上角菜单栏（传入 --silent 参数，不会突兀弹出主窗口打扰您）；而在访达或启动台双击图标时则会直接展示主窗口。"
+                  />
+                </div>
                 <label class="relative inline-flex items-center cursor-pointer">
                   <input
                     v-model="store.userSettings.launchAtLogin"
                     type="checkbox"
                     class="sr-only peer"
-                    @change="store.saveUserSettings()"
+                    @change="
+                      store.saveUserSettings().then(() => refreshSystemIntegrationStatus())
+                    "
                   />
                   <div
                     class="w-9 h-5 bg-slate-300 dark:bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-[#4E5BA6] dark:peer-checked:bg-indigo-500"

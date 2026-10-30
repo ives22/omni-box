@@ -8,7 +8,9 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview",
-    "tauri": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri"
+    "tauri": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri",
+    "build:mac": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build",
+    "install:mac": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build && rm -rf /Applications/OmniBox.app && cp -R src-tauri/target/release/bundle/macos/OmniBox.app /Applications/OmniBox.app"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.1.1",

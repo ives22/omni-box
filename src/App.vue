@@ -338,6 +338,9 @@ onMounted(async () => {
     __omniboxOnWindowShown?: (ctx?: WindowShownContext) => void
     __omniboxOnWindowHidden?: () => void
     __omniboxOpenSuperPanel?: (payload?: { clipboardText?: string }) => void
+    __omniboxOpenPlugin?: (pluginId: string) => void
+    __omniboxOnNativeSettingChanged?: (patch: Record<string, unknown>) => void
+    __omniboxOnTrayToast?: (msg: string) => void
   }
   winObj.__omniboxNativeEscape = triggerEscapeAction
   winObj.__omniboxResetState = resetLauncherToCleanState
@@ -358,6 +361,22 @@ onMounted(async () => {
   }
   winObj.__omniboxOpenSuperPanel = (payload) => {
     store.openSuperPanel(payload?.clipboardText || '')
+  }
+  winObj.__omniboxOpenPlugin = (pluginId: string) => {
+    store.isSuperPanelOpen = false
+    store.aiAnswerState = null
+    isRecentGridExpanded.value = false
+    store.openPlugin(pluginId)
+  }
+  winObj.__omniboxOnNativeSettingChanged = (patch) => {
+    store.userSettings = {
+      ...store.userSettings,
+      ...(patch as Partial<typeof store.userSettings>)
+    }
+  }
+  winObj.__omniboxOnTrayToast = (msg: string) => {
+    store.refreshSystemApps(false)
+    store.showToast(msg)
   }
 
   await store.initStore()

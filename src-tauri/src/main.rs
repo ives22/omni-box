@@ -35,6 +35,7 @@ static HIDE_ON_BLUR_ENABLED: AtomicBool = AtomicBool::new(true);
 static IS_DETACHED_WINDOW: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "macos")]
 static DETACHED_WINDOW_COUNT: AtomicU32 = AtomicU32::new(0);
+static ALLOW_APP_EXIT: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "macos")]
 static SUPER_PANEL_ENABLED: AtomicBool = AtomicBool::new(true);
 #[cfg(target_os = "macos")]
@@ -583,13 +584,41 @@ fn read_macos_clipboard_text() -> String {
 }
 
 #[cfg(target_os = "macos")]
+fn write_macos_clipboard_text(text: &str) {
+    use std::io::Write;
+    if let Ok(mut child) = Command::new("pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+    {
+        if let Some(stdin) = child.stdin.as_mut() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        let _ = child.wait();
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn resolve_preferred_autostart_executable() -> Result<PathBuf, String> {
+    let installed_app_bin = PathBuf::from("/Applications/OmniBox.app/Contents/MacOS/omni-box");
+    if installed_app_bin.exists() {
+        return Ok(installed_app_bin);
+    }
+    std::env::current_exe().map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "macos")]
 fn apply_macos_launch_at_login(enabled: bool) -> Result<(), String> {
     let home = dirs::home_dir().ok_or("Cannot resolve home directory")?;
     let agents_dir = home.join("Library").join("LaunchAgents");
     let plist_path = agents_dir.join("com.omnibox.launcher.plist");
 
     if enabled {
-        let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
+        let exe_path = resolve_preferred_autostart_executable()?;
+        let exe_str = exe_path.to_string_lossy();
+        // Avoid registering a cargo `target/debug` binary into LaunchAgents if `/Applications/OmniBox.app` is not yet installed
+        if exe_str.contains("/target/debug/") {
+            return Ok(());
+        }
         let _ = std::fs::create_dir_all(&agents_dir);
         let plist_xml = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -601,6 +630,7 @@ fn apply_macos_launch_at_login(enabled: bool) -> Result<(), String> {
     <key>ProgramArguments</key>
     <array>
         <string>{}</string>
+        <string>--silent</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -609,7 +639,7 @@ fn apply_macos_launch_at_login(enabled: bool) -> Result<(), String> {
 </dict>
 </plist>
 "#,
-            exe_path.to_string_lossy()
+            exe_str
         );
         std::fs::write(&plist_path, plist_xml).map_err(|e| e.to_string())?;
     } else if plist_path.exists() {
@@ -727,12 +757,20 @@ fn summon_macos_overlay_on_current_space_and_screen(win: &tauri::WebviewWindow) 
     }
 }
 
+pub struct TrayMenuHandles {
+    pub toggle_main_item: tauri::menu::MenuItem<tauri::Wry>,
+    pub chk_launch_at_login: tauri::menu::CheckMenuItem<tauri::Wry>,
+    pub chk_hide_on_blur: tauri::menu::CheckMenuItem<tauri::Wry>,
+    pub chk_super_panel: tauri::menu::CheckMenuItem<tauri::Wry>,
+}
+
 pub struct AppState {
     pub db: Mutex<AppDatabase>,
     pub items: Mutex<Vec<SearchableItem>>,
     pub sys_apps: Mutex<Vec<SearchableItem>>,
     pub icon_cache_dir: PathBuf,
     pub global_hotkey: Arc<Mutex<String>>,
+    pub tray_handles: Mutex<Option<TrayMenuHandles>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1344,7 +1382,15 @@ async fn spawn_detached_plugin_window(
 #[tauri::command]
 fn update_global_hotkey(hotkey: String, state: State<'_, AppState>) -> Result<(), String> {
     if let Ok(mut hk) = state.global_hotkey.lock() {
-        *hk = hotkey;
+        *hk = hotkey.clone();
+    }
+    if let Ok(guard) = state.tray_handles.lock() {
+        if let Some(handles) = guard.as_ref() {
+            let _ = handles.toggle_main_item.set_text(format!(
+                "🔍 呼出 / 隐藏 OmniBox 主面板 ({})",
+                hotkey
+            ));
+        }
     }
     Ok(())
 }
@@ -1384,6 +1430,7 @@ fn sync_native_preferences(
     window_opacity: f64,
     launch_at_login: bool,
     window: tauri::Window,
+    state: State<'_, AppState>,
 ) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -1399,6 +1446,14 @@ fn sync_native_preferences(
             };
             SUPER_PANEL_TRIGGER_MODE.store(trigger_mode, Ordering::Relaxed);
             let _ = apply_macos_launch_at_login(launch_at_login);
+
+            if let Ok(guard) = state.tray_handles.lock() {
+                if let Some(handles) = guard.as_ref() {
+                    let _ = handles.chk_launch_at_login.set_checked(launch_at_login);
+                    let _ = handles.chk_hide_on_blur.set_checked(hide_on_blur);
+                    let _ = handles.chk_super_panel.set_checked(super_panel_enabled);
+                }
+            }
         }
 
         if let Ok(ns_win) = window.ns_window() {
@@ -2545,7 +2600,435 @@ async fn fetch_url_json_via_curl(url: String) -> Result<String, String> {
     .map_err(|e| e.to_string())?
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SystemIntegrationStatus {
+    pub installed_in_applications: bool,
+    pub applications_bundle_path: String,
+    pub current_executable_path: String,
+    pub is_running_from_applications: bool,
+    pub launch_agent_plist_path: String,
+    pub launch_agent_configured: bool,
+    pub tray_active: bool,
+}
+
+#[tauri::command]
+fn get_system_integration_status() -> Result<SystemIntegrationStatus, String> {
+    let app_bundle = PathBuf::from("/Applications/OmniBox.app");
+    let installed_in_applications = app_bundle.exists();
+    let cur_exe = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let is_running_from_applications = cur_exe.starts_with("/Applications/OmniBox.app");
+
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let plist_path = home
+        .join("Library")
+        .join("LaunchAgents")
+        .join("com.omnibox.launcher.plist");
+    let launch_agent_configured = plist_path.exists();
+
+    Ok(SystemIntegrationStatus {
+        installed_in_applications,
+        applications_bundle_path: "/Applications/OmniBox.app".to_string(),
+        current_executable_path: cur_exe,
+        is_running_from_applications,
+        launch_agent_plist_path: plist_path.to_string_lossy().to_string(),
+        launch_agent_configured,
+        tray_active: true,
+    })
+}
+
+fn summon_and_open_plugin_in_main(app_handle: &AppHandle, plugin_id: &str) {
+    if let Some(win) = app_handle.get_webview_window("main") {
+        let _ = win.unminimize();
+        #[cfg(target_os = "macos")]
+        {
+            summon_macos_overlay_on_current_space_and_screen(&win);
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = win.show();
+            let _ = win.set_focus();
+        }
+        let script = format!(
+            "window.__omniboxOpenPlugin ? window.__omniboxOpenPlugin('{}') : null",
+            plugin_id
+        );
+        let _ = win.eval(&script);
+    }
+}
+
+fn update_saved_user_setting_bool(app_handle: &AppHandle, field: &str, value: bool) {
+    if let Some(state) = app_handle.try_state::<AppState>() {
+        if let Ok(db) = state.db.lock() {
+            let mut root = db
+                .kv_get("system", "user-settings")
+                .ok()
+                .flatten()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                .unwrap_or_else(|| serde_json::json!({}));
+            if let Some(obj) = root.as_object_mut() {
+                obj.insert(field.to_string(), serde_json::Value::Bool(value));
+                if let Ok(serialized) = serde_json::to_string(&root) {
+                    let _ = db.kv_put("system", "user-settings", &serialized);
+                }
+            }
+        }
+    }
+    if let Some(win) = app_handle.get_webview_window("main") {
+        let payload = serde_json::json!({
+            field: value
+        });
+        let _ = win.eval(&format!(
+            "window.__omniboxOnNativeSettingChanged && window.__omniboxOnNativeSettingChanged({})",
+            payload
+        ));
+    }
+}
+
+fn setup_system_tray(
+    app: &tauri::App,
+    initial_hotkey: &str,
+    initial_launch_at_login: bool,
+    initial_hide_on_blur: bool,
+    initial_super_panel: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::menu::{
+        CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder,
+    };
+    use tauri::tray::TrayIconBuilder;
+
+    let toggle_main_item = MenuItemBuilder::with_id(
+        "tray_toggle_main",
+        format!("🔍 呼出 / 隐藏 OmniBox 主面板 ({})", initial_hotkey),
+    )
+    .build(app)?;
+
+    let super_panel_item =
+        MenuItemBuilder::with_id("tray_open_super_panel", "✨ 呼出超级面板 (Super Panel)")
+            .build(app)?;
+
+    // Submenu 1: Open Built-in Workbenches in Main Window
+    let sub_workbenches = SubmenuBuilder::new(app, "⚡ 快捷打开内置工作台")
+        .item(
+            &MenuItemBuilder::with_id("open_plugin:calc-pad", "🧮 计算稿纸 (Calc Pad)").build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("open_plugin:ip-studio", "🌐 IP 与网络工作台 (IP Studio)")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id(
+                "open_plugin:unit-converter",
+                "⚖️ 换算与格式工作台 (Unit & Format)",
+            )
+            .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("open_plugin:json-studio", "🧩 JSON 助手 (JSON Studio)")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("open_plugin:diff-viewer", "🔀 文本对比 (Diff Viewer)")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id(
+                "open_plugin:authenticator",
+                "🛡️ 2FA 验证码管理 (Authenticator)",
+            )
+            .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("open_plugin:password-vault", "🔐 密码本 (Password Vault)")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("open_plugin:utools-hub", "🧱 uTools 插件中心 (Plugin Hub)")
+                .build(app)?,
+        )
+        .build()?;
+
+    // Submenu 2: Spawn Independent Detached Windows
+    let sub_detached = SubmenuBuilder::new(app, "🪟 以独立窗口打开工具")
+        .item(
+            &MenuItemBuilder::with_id("detach_plugin:calc-pad", "🧮 独立窗口：计算稿纸")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("detach_plugin:ip-studio", "🌐 独立窗口：IP 与网络工作台")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id(
+                "detach_plugin:unit-converter",
+                "⚖️ 独立窗口：换算与格式工作台",
+            )
+            .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("detach_plugin:json-studio", "🧩 独立窗口：JSON 助手")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("detach_plugin:diff-viewer", "🔀 独立窗口：文本对比")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("detach_plugin:password-vault", "🔐 独立窗口：密码本")
+                .build(app)?,
+        )
+        .build()?;
+
+    // Submenu 3: Quick System Commands
+    let sub_sys_cmds = SubmenuBuilder::new(app, "🛠️ 本机快捷系统指令")
+        .item(
+            &MenuItemBuilder::with_id("sys_cmd:sys:copy-local-ip", "📋 复制本机局域网出口 IP")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id(
+                "sys_cmd:sys:toggle-dark-mode",
+                "🌓 切换 macOS 系统深浅色模式",
+            )
+            .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id(
+                "sys_cmd:sys:show-hidden-files",
+                "👁️ 切换 Finder 显示隐藏文件",
+            )
+            .build(app)?,
+        )
+        .item(&MenuItemBuilder::with_id("sys_cmd:sys:empty-trash", "🗑️ 清空废纸篓").build(app)?)
+        .item(&MenuItemBuilder::with_id("sys_cmd:sys:lock-screen", "🔒 立即锁定屏幕").build(app)?)
+        .build()?;
+
+    // Live CheckMenuItems
+    let chk_launch_at_login = CheckMenuItemBuilder::with_id(
+        "tray_chk_launch_at_login",
+        "开机自动静默启动 (Launch at Login)",
+    )
+    .checked(initial_launch_at_login)
+    .build(app)?;
+
+    let chk_hide_on_blur =
+        CheckMenuItemBuilder::with_id("tray_chk_hide_on_blur", "失去焦点时自动隐藏主窗口")
+            .checked(initial_hide_on_blur)
+            .build(app)?;
+
+    let chk_super_panel =
+        CheckMenuItemBuilder::with_id("tray_chk_super_panel", "启用鼠标长按呼出超级面板")
+            .checked(initial_super_panel)
+            .build(app)?;
+
+    let rescan_item =
+        MenuItemBuilder::with_id("tray_rescan_apps", "🔄 重新扫描本机应用索引").build(app)?;
+    let settings_item =
+        MenuItemBuilder::with_id("tray_open_settings", "⚙️ 个人中心与偏好设置... (⌘,)")
+            .build(app)?;
+    let quit_item =
+        MenuItemBuilder::with_id("tray_quit", "🚪 完全退出 OmniBox (⌘Q)").build(app)?;
+
+    let sep1 = PredefinedMenuItem::separator(app)?;
+    let sep2 = PredefinedMenuItem::separator(app)?;
+    let sep3 = PredefinedMenuItem::separator(app)?;
+    let sep4 = PredefinedMenuItem::separator(app)?;
+
+    let tray_menu = MenuBuilder::new(app)
+        .items(&[
+            &toggle_main_item,
+            &super_panel_item,
+            &sep1,
+            &sub_workbenches,
+            &sub_detached,
+            &sub_sys_cmds,
+            &sep2,
+            &chk_launch_at_login,
+            &chk_hide_on_blur,
+            &chk_super_panel,
+            &sep3,
+            &rescan_item,
+            &settings_item,
+            &sep4,
+            &quit_item,
+        ])
+        .build()?;
+
+    // Save handles into AppState so preferences page can sync with Tray CheckMenuItems
+    if let Some(state) = app.try_state::<AppState>() {
+        if let Ok(mut guard) = state.tray_handles.lock() {
+            *guard = Some(TrayMenuHandles {
+                toggle_main_item: toggle_main_item.clone(),
+                chk_launch_at_login: chk_launch_at_login.clone(),
+                chk_hide_on_blur: chk_hide_on_blur.clone(),
+                chk_super_panel: chk_super_panel.clone(),
+            });
+        }
+    }
+
+    let tray_icon_img = tauri::image::Image::from_bytes(include_bytes!("../icons/64x64.png"))
+        .ok()
+        .or_else(|| app.default_window_icon().cloned());
+
+    let mut builder = TrayIconBuilder::with_id("omnibox-status-tray")
+        .menu(&tray_menu)
+        .show_menu_on_left_click(true)
+        .tooltip("OmniBox · 极速桌面工作台 (Option + Space / ⌘⌘)");
+
+    if let Some(img) = tray_icon_img {
+        builder = builder.icon(img);
+    }
+
+    builder
+        .on_menu_event(move |app_handle, event| {
+            let id = event.id().as_ref();
+            match id {
+                "tray_toggle_main" => {
+                    toggle_launcher_window(app_handle);
+                }
+                "tray_open_super_panel" => {
+                    if let Some(win) = app_handle.get_webview_window("main") {
+                        #[cfg(target_os = "macos")]
+                        let clip = read_macos_clipboard_text();
+                        #[cfg(not(target_os = "macos"))]
+                        let clip = String::new();
+                        let payload = serde_json::json!({ "clipboardText": clip });
+                        let _ = win.unminimize();
+                        #[cfg(target_os = "macos")]
+                        summon_macos_overlay_on_current_space_and_screen(&win);
+                        let _ = win.eval(&format!(
+                            "window.__omniboxOpenSuperPanel && window.__omniboxOpenSuperPanel({})",
+                            payload
+                        ));
+                    }
+                }
+                "tray_open_settings" => {
+                    summon_and_open_plugin_in_main(app_handle, "user-center");
+                }
+                "tray_rescan_apps" => {
+                    let handle_clone = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Some(state) = handle_clone.try_state::<AppState>() {
+                            let cache_dir = state.icon_cache_dir.clone();
+                            let fresh = scan_system_applications(&cache_dir);
+                            let combined = build_core_items(&fresh);
+                            if let Ok(mut s) = state.sys_apps.lock() {
+                                *s = fresh;
+                            }
+                            if let Ok(mut it) = state.items.lock() {
+                                *it = combined;
+                            }
+                        }
+                        if let Some(win) = handle_clone.get_webview_window("main") {
+                            let _ = win.eval(
+                                "window.__omniboxOnTrayToast && window.__omniboxOnTrayToast('已重新扫描本机应用索引')",
+                            );
+                        }
+                    });
+                }
+                "tray_chk_launch_at_login" => {
+                    let next_val = if let Some(state) = app_handle.try_state::<AppState>() {
+                        state
+                            .tray_handles
+                            .lock()
+                            .ok()
+                            .and_then(|g| g.as_ref().and_then(|h| h.chk_launch_at_login.is_checked().ok()))
+                            .unwrap_or(true)
+                    } else {
+                        true
+                    };
+                    #[cfg(target_os = "macos")]
+                    {
+                        let _ = apply_macos_launch_at_login(next_val);
+                    }
+                    update_saved_user_setting_bool(app_handle, "launchAtLogin", next_val);
+                }
+                "tray_chk_hide_on_blur" => {
+                    let next_val = if let Some(state) = app_handle.try_state::<AppState>() {
+                        state
+                            .tray_handles
+                            .lock()
+                            .ok()
+                            .and_then(|g| g.as_ref().and_then(|h| h.chk_hide_on_blur.is_checked().ok()))
+                            .unwrap_or(true)
+                    } else {
+                        true
+                    };
+                    #[cfg(target_os = "macos")]
+                    HIDE_ON_BLUR_ENABLED.store(next_val, Ordering::Relaxed);
+                    update_saved_user_setting_bool(app_handle, "hideOnBlur", next_val);
+                }
+                "tray_chk_super_panel" => {
+                    let next_val = if let Some(state) = app_handle.try_state::<AppState>() {
+                        state
+                            .tray_handles
+                            .lock()
+                            .ok()
+                            .and_then(|g| g.as_ref().and_then(|h| h.chk_super_panel.is_checked().ok()))
+                            .unwrap_or(true)
+                    } else {
+                        true
+                    };
+                    #[cfg(target_os = "macos")]
+                    SUPER_PANEL_ENABLED.store(next_val, Ordering::Relaxed);
+                    update_saved_user_setting_bool(app_handle, "enableSuperPanel", next_val);
+                }
+                "tray_quit" => {
+                    ALLOW_APP_EXIT.store(true, Ordering::Relaxed);
+                    app_handle.exit(0);
+                }
+                other if other.starts_with("open_plugin:") => {
+                    let plugin_id = other.trim_start_matches("open_plugin:");
+                    summon_and_open_plugin_in_main(app_handle, plugin_id);
+                }
+                other if other.starts_with("detach_plugin:") => {
+                    let plugin_id = other.trim_start_matches("detach_plugin:").to_string();
+                    let title = match plugin_id.as_str() {
+                        "calc-pad" => "计算稿纸 (Calc Pad)",
+                        "ip-studio" => "IP 与网络工作台 (IP Studio)",
+                        "unit-converter" => "换算与格式工作台 (Unit & Format)",
+                        "json-studio" => "JSON 助手 (JSON Studio)",
+                        "diff-viewer" => "文本对比 (Diff Viewer)",
+                        "password-vault" => "密码本 (Password Vault)",
+                        _ => "OmniBox 独立工具窗口",
+                    }
+                    .to_string();
+                    let handle_clone = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = spawn_detached_plugin_window(plugin_id, None, title, handle_clone)
+                            .await;
+                    });
+                }
+                other if other.starts_with("sys_cmd:") => {
+                    let cmd_id = other.trim_start_matches("sys_cmd:").to_string();
+                    if let Ok(res_text) = execute_system_command(cmd_id.clone()) {
+                        if cmd_id == "sys:copy-local-ip" {
+                            #[cfg(target_os = "macos")]
+                            write_macos_clipboard_text(&res_text);
+                            if let Some(win) = app_handle.get_webview_window("main") {
+                                let _ = win.eval(&format!(
+                                    "window.__omniboxOnTrayToast && window.__omniboxOnTrayToast('已复制局域网出口 IP: {}')",
+                                    res_text
+                                ));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        })
+        .build(app)?;
+
+    Ok(())
+}
+
 fn main() {
+    let is_silent_launch = std::env::args().any(|a| {
+        a == "--silent" || a == "--minimized" || a == "--autostart" || a == "-s"
+    });
+
     let app_data_dir = dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("com.omnibox.launcher");
@@ -2557,16 +3040,41 @@ fn main() {
     let sys_apps = scan_system_applications(&icon_cache_dir);
     let initial_items = build_core_items(&sys_apps);
 
-    // Load saved globalHotkey from SQLite if present
-    let initial_hotkey = db
+    // Load saved settings from SQLite if present
+    let saved_settings_json = db
         .kv_get("system", "user-settings")
         .ok()
         .flatten()
-        .and_then(|json_str| serde_json::from_str::<serde_json::Value>(&json_str).ok())
+        .and_then(|json_str| serde_json::from_str::<serde_json::Value>(&json_str).ok());
+
+    let initial_hotkey = saved_settings_json
+        .as_ref()
         .and_then(|v| v["globalHotkey"].as_str().map(String::from))
         .unwrap_or_else(|| "Option + Space".to_string());
 
-    let hotkey_arc = Arc::new(Mutex::new(initial_hotkey));
+    let initial_launch_at_login = saved_settings_json
+        .as_ref()
+        .and_then(|v| v["launchAtLogin"].as_bool())
+        .unwrap_or(true);
+
+    let initial_hide_on_blur = saved_settings_json
+        .as_ref()
+        .and_then(|v| v["hideOnBlur"].as_bool())
+        .unwrap_or(true);
+
+    let initial_super_panel = saved_settings_json
+        .as_ref()
+        .and_then(|v| v["enableSuperPanel"].as_bool())
+        .unwrap_or(true);
+
+    #[cfg(target_os = "macos")]
+    {
+        HIDE_ON_BLUR_ENABLED.store(initial_hide_on_blur, Ordering::Relaxed);
+        SUPER_PANEL_ENABLED.store(initial_super_panel, Ordering::Relaxed);
+        let _ = apply_macos_launch_at_login(initial_launch_at_login);
+    }
+
+    let hotkey_arc = Arc::new(Mutex::new(initial_hotkey.clone()));
     let hotkey_for_setup = hotkey_arc.clone();
 
     let app = tauri::Builder::default()
@@ -2576,8 +3084,17 @@ fn main() {
             sys_apps: Mutex::new(sys_apps),
             icon_cache_dir,
             global_hotkey: hotkey_arc,
+            tray_handles: Mutex::new(None),
         })
         .setup(move |app| {
+            let _ = setup_system_tray(
+                app,
+                &initial_hotkey,
+                initial_launch_at_login,
+                initial_hide_on_blur,
+                initial_super_panel,
+            );
+
             #[cfg(target_os = "macos")]
             {
                 let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
@@ -2587,6 +3104,10 @@ fn main() {
                     if let Ok(ns_win) = win.ns_window() {
                         configure_nswindow_overlay_props(ns_win);
                         place_nswindow_on_active_mouse_screen(ns_win, true);
+                        if is_silent_launch {
+                            hide_nswindow_native(ns_win);
+                            let _ = win.hide();
+                        }
                     }
                 }
                 spawn_macos_global_hotkey_listener(app.handle().clone(), hotkey_for_setup);
@@ -2619,7 +3140,8 @@ fn main() {
             capture_screen_region_base64,
             read_clipboard_image_base64,
             get_local_network_overview,
-            fetch_url_json_via_curl
+            fetch_url_json_via_curl,
+            get_system_integration_status
         ])
         .build(tauri::generate_context!())
         .expect("error while building OmniBox Tauri application");
@@ -2657,7 +3179,9 @@ fn main() {
                 }
             }
             tauri::RunEvent::ExitRequested { api, .. } => {
-                api.prevent_exit();
+                if !ALLOW_APP_EXIT.load(Ordering::Relaxed) {
+                    api.prevent_exit();
+                }
             }
             _ => {}
         }
