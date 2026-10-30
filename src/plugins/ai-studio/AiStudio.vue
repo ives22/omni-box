@@ -170,7 +170,13 @@ const activeSessionId = ref<string>('')
 const activeRoleId = ref<string>('general')
 
 const inputPrompt = ref('')
-const isGenerating = ref(false)
+const generatingSessionMap = ref<Record<string, boolean>>({})
+const isCurrentSessionGenerating = computed(() =>
+  Boolean(activeSessionId.value && generatingSessionMap.value[activeSessionId.value])
+)
+const activeGeneratingCount = computed(
+  () => Object.values(generatingSessionMap.value).filter(Boolean).length
+)
 const copiedKey = ref<string | null>(null)
 const expandedReasoningIds = ref<Record<string, boolean>>({})
 const messagesScrollRef = ref<HTMLElement | null>(null)
@@ -306,17 +312,43 @@ function createNewSession(roleId = activeRoleId.value): AiChatSession {
   return s
 }
 
+function isRoleGenerating(roleId: string): boolean {
+  return sessions.value.some((s) => s.roleId === roleId && generatingSessionMap.value[s.id])
+}
+
 function selectRole(roleId: string) {
   activeRoleId.value = roleId
   const cur = activeSession.value
-  if (!cur || cur.turns.length > 0) {
-    createNewSession(roleId)
-  } else {
+
+  // 1. If there is an active in-flight session for this role, switch directly to it
+  const generatingForRole = sessions.value.find(
+    (s) => s.roleId === roleId && generatingSessionMap.value[s.id]
+  )
+  if (generatingForRole) {
+    activeSessionId.value = generatingForRole.id
+    scrollToBottom()
+    return
+  }
+
+  // 2. If there is an existing session for this role (with turns or empty), switch to the most recent one
+  const latestForRole = sessions.value.find((s) => s.roleId === roleId)
+  if (latestForRole) {
+    activeSessionId.value = latestForRole.id
+    scrollToBottom()
+    return
+  }
+
+  // 3. If current session is completely empty and idle, repurpose it for the selected role
+  if (cur && cur.turns.length === 0 && !generatingSessionMap.value[cur.id]) {
     cur.roleId = roleId
     const role = allRoles.value.find((r) => r.id === roleId) || BUILTIN_ROLES[0]
     cur.title = `${role.name} · 新对话`
     persistSessions()
+    return
   }
+
+  // 4. Otherwise create a fresh session for this role
+  createNewSession(roleId)
 }
 
 function selectSession(session: AiChatSession) {
@@ -396,18 +428,76 @@ async function pasteClipboardAndAsk() {
   }
 }
 
+function readInflightMap(): Record<string, { userTurnId: string; startedAt: number }> {
+  try {
+    const raw = localStorage.getItem(INFLIGHT_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    if (parsed && typeof parsed === 'object') {
+      // Backward compatibility if single object was stored previously
+      if ('sessionId' in parsed && typeof parsed.sessionId === 'string') {
+        return {
+          [parsed.sessionId]: {
+            userTurnId: parsed.userTurnId || '',
+            startedAt: parsed.startedAt || Date.now()
+          }
+        }
+      }
+      return parsed
+    }
+  } catch {
+    // ignore
+  }
+  return {}
+}
+
+function setSessionInflight(sessionId: string, userTurnId: string | null) {
+  generatingSessionMap.value = {
+    ...generatingSessionMap.value,
+    [sessionId]: Boolean(userTurnId)
+  }
+  if (!userTurnId) {
+    delete generatingSessionMap.value[sessionId]
+  }
+  try {
+    const map = readInflightMap()
+    if (userTurnId) {
+      map[sessionId] = { userTurnId, startedAt: Date.now() }
+    } else {
+      delete map[sessionId]
+    }
+    if (Object.keys(map).length === 0) {
+      localStorage.removeItem(INFLIGHT_STORAGE_KEY)
+    } else {
+      localStorage.setItem(INFLIGHT_STORAGE_KEY, JSON.stringify(map))
+    }
+  } catch {
+    // ignore
+  }
+}
+
 async function sendMessage(overrideText?: string) {
   const text = (overrideText !== undefined ? overrideText : inputPrompt.value).trim()
-  if (!text || isGenerating.value) return
-
-  if (overrideText === undefined) {
-    inputPrompt.value = ''
-  }
+  if (!text) return
 
   let session = activeSession.value
   if (!session) {
     session = createNewSession(activeRoleId.value)
   }
+
+  // Only block if THIS specific session is already awaiting a response
+  if (generatingSessionMap.value[session.id]) {
+    store.showToast('当前会话正在生成回答中，您可新建或切换到其它会话并发提问', 'info')
+    return
+  }
+
+  if (overrideText === undefined) {
+    inputPrompt.value = ''
+  }
+
+  // Capture session role & system prompt at the moment of sending so switching roles mid-flight won't affect this request
+  const sessionRole =
+    allRoles.value.find((r) => r.id === session!.roleId) || activeRole.value
 
   // Update session title on first user message
   if (session.turns.length === 0) {
@@ -447,26 +537,14 @@ async function sendMessage(overrideText?: string) {
     return
   }
 
-  isGenerating.value = true
   const targetSessionId = session.id
-  try {
-    localStorage.setItem(
-      INFLIGHT_STORAGE_KEY,
-      JSON.stringify({
-        sessionId: targetSessionId,
-        userTurnId: userTurn.id,
-        startedAt: Date.now()
-      })
-    )
-  } catch {
-    // ignore
-  }
+  setSessionInflight(targetSessionId, userTurn.id)
 
   // Build context messages (system prompt + last 10 turns for multi-turn continuity)
   const historyMessages: AiChatMessageInput[] = [
     {
       role: 'system',
-      content: activeRole.value.systemPrompt
+      content: sessionRole.systemPrompt
     }
   ]
 
@@ -506,7 +584,6 @@ async function sendMessage(overrideText?: string) {
       createdAt: Date.now(),
       isError: false
     }
-    session.turns.push(assistantTurn)
   } catch (e) {
     assistantTurn = {
       id: `turn-a-${Date.now()}`,
@@ -516,42 +593,47 @@ async function sendMessage(overrideText?: string) {
       createdAt: Date.now(),
       isError: true
     }
-    session.turns.push(assistantTurn)
   } finally {
-    isGenerating.value = false
-    session.updatedAt = Date.now()
+    setSessionInflight(targetSessionId, null)
 
-    // Ensure that even if the user pressed Cmd+D while this request was in flight,
-    // we merge the completed assistant response into the latest persisted sessions list!
+    // Append assistant turn to whichever session list is freshest (in-memory or KV storage across Cmd+D)
+    const memSession = sessions.value.find((s) => s.id === targetSessionId)
+    if (memSession && assistantTurn) {
+      if (!memSession.turns.some((t) => t.id === assistantTurn!.id)) {
+        memSession.turns.push(assistantTurn)
+        memSession.updatedAt = Date.now()
+      }
+    }
+
     try {
       const latestStored = await kvGet<AiChatSession[]>('ai-studio', 'sessions', [])
       if (latestStored && latestStored.length > 0 && assistantTurn) {
         const found = latestStored.find((s) => s.id === targetSessionId)
-        if (found) {
-          if (!found.turns.some((t) => t.id === assistantTurn!.id)) {
-            found.turns.push(assistantTurn)
-            found.updatedAt = Date.now()
+        if (found && !found.turns.some((t) => t.id === assistantTurn!.id)) {
+          found.turns.push(assistantTurn)
+          found.updatedAt = Date.now()
+          // If this window was already unmounted (Cmd+D moved to standalone window), persist latestStored directly
+          if (!memSession) {
+            await kvPut('ai-studio', 'sessions', latestStored.slice(0, 50))
+            localStorage.setItem(SYNC_SIGNAL_STORAGE_KEY, String(Date.now()))
+            return
           }
-          sessions.value = latestStored
         }
       }
     } catch {
       // ignore
     }
 
-    try {
-      localStorage.removeItem(INFLIGHT_STORAGE_KEY)
-    } catch {
-      // ignore
-    }
     await persistSessions()
-    scrollToBottom()
+    if (activeSessionId.value === targetSessionId) {
+      scrollToBottom()
+    }
   }
 }
 
 async function regenerateLastResponse() {
   const session = activeSession.value
-  if (!session || isGenerating.value || session.turns.length === 0) return
+  if (!session || generatingSessionMap.value[session.id] || session.turns.length === 0) return
   // Find last user message
   let lastUserIdx = -1
   for (let i = session.turns.length - 1; i >= 0; i--) {
@@ -689,42 +771,55 @@ let inflightPollTimer: ReturnType<typeof setInterval> | null = null
 async function reloadSessionsFromKvAndCheckInflight() {
   const savedSessions = await kvGet<AiChatSession[]>('ai-studio', 'sessions', [])
   if (savedSessions && savedSessions.length > 0) {
-    sessions.value = savedSessions
+    // Merge turns from savedSessions without clobbering user's current activeSessionId selection!
+    for (const saved of savedSessions) {
+      const existing = sessions.value.find((s) => s.id === saved.id)
+      if (!existing) {
+        sessions.value.push(saved)
+      } else if (saved.turns.length > existing.turns.length) {
+        existing.turns = saved.turns
+        existing.updatedAt = saved.updatedAt
+        existing.title = saved.title
+        if (activeSessionId.value === existing.id) {
+          scrollToBottom()
+        }
+      }
+    }
     if (!sessions.value.some((s) => s.id === activeSessionId.value)) {
-      activeSessionId.value = savedSessions[0].id
-      activeRoleId.value = savedSessions[0].roleId || 'general'
+      activeSessionId.value = sessions.value[0].id
+      activeRoleId.value = sessions.value[0].roleId || 'general'
     }
   }
 
-  try {
-    const rawInflight = localStorage.getItem(INFLIGHT_STORAGE_KEY)
-    if (rawInflight) {
-      const inflight = JSON.parse(rawInflight) as {
-        sessionId: string
-        userTurnId: string
-        startedAt: number
-      }
-      const isFresh = Date.now() - inflight.startedAt < 90_000
-      const targetSess = sessions.value.find((s) => s.id === inflight.sessionId)
-      const lastTurn = targetSess?.turns[targetSess.turns.length - 1]
-      if (isFresh && targetSess && lastTurn?.role === 'user') {
-        activeSessionId.value = targetSess.id
-        activeRoleId.value = targetSess.roleId || 'general'
-        isGenerating.value = true
-        scrollToBottom()
-        return
-      } else {
+  const inflightMap = readInflightMap()
+  const nextGenerating: Record<string, boolean> = {}
+  let mapChanged = false
+
+  for (const [sessId, info] of Object.entries(inflightMap)) {
+    const isFresh = Date.now() - info.startedAt < 90_000
+    const targetSess = sessions.value.find((s) => s.id === sessId)
+    const lastTurn = targetSess?.turns[targetSess.turns.length - 1]
+    if (isFresh && targetSess && lastTurn?.role === 'user') {
+      nextGenerating[sessId] = true
+    } else {
+      delete inflightMap[sessId]
+      mapChanged = true
+    }
+  }
+
+  if (mapChanged) {
+    try {
+      if (Object.keys(inflightMap).length === 0) {
         localStorage.removeItem(INFLIGHT_STORAGE_KEY)
+      } else {
+        localStorage.setItem(INFLIGHT_STORAGE_KEY, JSON.stringify(inflightMap))
       }
+    } catch {
+      // ignore
     }
-  } catch {
-    // ignore
   }
 
-  if (isGenerating.value) {
-    isGenerating.value = false
-    scrollToBottom()
-  }
+  generatingSessionMap.value = nextGenerating
 }
 
 function handleStorageEvent(e: StorageEvent) {
@@ -793,7 +888,7 @@ onMounted(async () => {
 
   window.addEventListener('storage', handleStorageEvent)
   inflightPollTimer = setInterval(() => {
-    if (isGenerating.value || localStorage.getItem(INFLIGHT_STORAGE_KEY)) {
+    if (activeGeneratingCount.value > 0 || localStorage.getItem(INFLIGHT_STORAGE_KEY)) {
       reloadSessionsFromKvAndCheckInflight()
     }
   }, 450)
@@ -868,7 +963,13 @@ onUnmounted(() => {
             "
             @click="sidebarTab = 'history'"
           >
-            对话历史 ({{ sessions.length }})
+            <span>对话历史 ({{ sessions.length }})</span>
+            <IconRenderer
+              v-if="activeGeneratingCount > 0"
+              name="RefreshCw"
+              :size="11"
+              class-name="inline-block ml-1 animate-spin text-indigo-400"
+            />
           </button>
         </div>
       </div>
@@ -895,14 +996,27 @@ onUnmounted(() => {
             <div class="flex items-center justify-between gap-1.5">
               <div class="flex items-center gap-2 min-w-0">
                 <IconRenderer
-                  :name="role.icon"
+                  :name="isRoleGenerating(role.id) ? 'RefreshCw' : role.icon"
                   :size="14"
-                  :class-name="activeRoleId === role.id ? 'text-indigo-400 shrink-0' : 'text-slate-400 shrink-0'"
+                  :class-name="
+                    isRoleGenerating(role.id)
+                      ? 'text-indigo-400 animate-spin shrink-0'
+                      : activeRoleId === role.id
+                        ? 'text-indigo-400 shrink-0'
+                        : 'text-slate-400 shrink-0'
+                  "
                 />
                 <span class="text-xs font-bold truncate">{{ role.name }}</span>
               </div>
               <div class="flex items-center gap-1 shrink-0">
                 <span
+                  v-if="isRoleGenerating(role.id)"
+                  class="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/20 text-indigo-400"
+                >
+                  生成中
+                </span>
+                <span
+                  v-else
                   class="px-1.5 py-0.5 rounded text-[10px] font-medium"
                   :class="
                     activeRoleId === role.id
@@ -949,9 +1063,18 @@ onUnmounted(() => {
             @click="selectSession(sess)"
           >
             <div class="min-w-0 flex-1">
-              <div class="text-xs font-semibold truncate">{{ sess.title }}</div>
+              <div class="text-xs font-semibold truncate flex items-center gap-1.5">
+                <IconRenderer
+                  v-if="generatingSessionMap[sess.id]"
+                  name="RefreshCw"
+                  :size="11"
+                  class-name="animate-spin text-indigo-400 shrink-0"
+                />
+                <span class="truncate">{{ sess.title }}</span>
+              </div>
               <div class="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1.5">
-                <span>{{ sess.turns.length }} 条消息</span>
+                <span v-if="generatingSessionMap[sess.id]" class="text-indigo-400 font-medium">正在生成回答...</span>
+                <span v-else>{{ sess.turns.length }} 条消息</span>
                 <span>·</span>
                 <span>{{ new Date(sess.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
               </div>
@@ -1351,9 +1474,9 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <!-- Generating Loading Indicator -->
+          <!-- Generating Loading Indicator (Scoped to current active session only) -->
           <div
-            v-if="isGenerating"
+            v-if="isCurrentSessionGenerating"
             class="p-3.5 rounded-2xl border flex items-center gap-2.5 text-xs text-slate-400"
             :class="
               store.isDark
@@ -1411,7 +1534,7 @@ onUnmounted(() => {
 
           <button
             type="button"
-            :disabled="isGenerating || !inputPrompt.trim()"
+            :disabled="isCurrentSessionGenerating || !inputPrompt.trim()"
             class="h-[54px] px-4 rounded-xl font-semibold text-xs flex items-center gap-1.5 cursor-pointer transition-all shrink-0 disabled:opacity-40"
             :class="
               store.isDark
