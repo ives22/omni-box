@@ -699,7 +699,7 @@ onUnmounted(() => {
               </div>
               <div class="flex items-center gap-2.5 shrink-0">
                 <button
-                  v-if="store.aiAnswerState.answer && !store.aiAnswerState.error"
+                  v-if="!store.aiAnswerState.error"
                   type="button"
                   class="px-2.5 py-1 rounded-lg text-[11.5px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
                   :class="
@@ -710,7 +710,7 @@ onUnmounted(() => {
                   @click="store.continueQuickAskInAiStudio()"
                 >
                   <IconRenderer name="CornerUpRight" :size="12" />
-                  <span>继续追问 (AI 工作台)</span>
+                  <span>{{ store.aiAnswerState.loading ? '转入 AI 工作台 (⌘D)' : '继续追问 (AI 工作台)' }}</span>
                 </button>
                 <button
                   v-if="store.aiAnswerState.error"

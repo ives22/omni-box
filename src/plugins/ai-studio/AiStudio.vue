@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useLauncherStore } from '@/stores/launcher'
 import {
   requestAiChatCompletion,
@@ -252,8 +252,38 @@ function scrollToBottom() {
   })
 }
 
+const UI_STATE_STORAGE_KEY = 'omnibox:ai-studio:ui-state'
+const INFLIGHT_STORAGE_KEY = 'omnibox:ai-studio:inflight'
+const SYNC_SIGNAL_STORAGE_KEY = 'omnibox:ai-studio:sync-signal'
+
+function saveUiStateSnapshot() {
+  try {
+    localStorage.setItem(
+      UI_STATE_STORAGE_KEY,
+      JSON.stringify({
+        activeSessionId: activeSessionId.value,
+        activeRoleId: activeRoleId.value,
+        sidebarTab: sidebarTab.value,
+        inputPrompt: inputPrompt.value,
+        updatedAt: Date.now()
+      })
+    )
+  } catch {
+    // ignore storage errors
+  }
+}
+
+watch([activeSessionId, activeRoleId, sidebarTab, inputPrompt], () => {
+  saveUiStateSnapshot()
+})
+
 async function persistSessions() {
   await kvPut('ai-studio', 'sessions', sessions.value.slice(0, 50))
+  try {
+    localStorage.setItem(SYNC_SIGNAL_STORAGE_KEY, String(Date.now()))
+  } catch {
+    // ignore
+  }
 }
 
 async function persistCustomRoles() {
@@ -393,6 +423,9 @@ async function sendMessage(overrideText?: string) {
   }
   session.turns.push(userTurn)
   session.updatedAt = Date.now()
+  activeSessionId.value = session.id
+  saveUiStateSnapshot()
+  await persistSessions()
   scrollToBottom()
 
   const provider = store.userSettings.aiProvider || 'OpenAI'
@@ -415,6 +448,19 @@ async function sendMessage(overrideText?: string) {
   }
 
   isGenerating.value = true
+  const targetSessionId = session.id
+  try {
+    localStorage.setItem(
+      INFLIGHT_STORAGE_KEY,
+      JSON.stringify({
+        sessionId: targetSessionId,
+        userTurnId: userTurn.id,
+        startedAt: Date.now()
+      })
+    )
+  } catch {
+    // ignore
+  }
 
   // Build context messages (system prompt + last 10 turns for multi-turn continuity)
   const historyMessages: AiChatMessageInput[] = [
@@ -437,6 +483,7 @@ async function sendMessage(overrideText?: string) {
       ? store.userSettings.proxyHost.trim()
       : undefined
 
+  let assistantTurn: AiChatTurn | null = null
   try {
     const res = await requestAiChatCompletion({
       provider,
@@ -448,7 +495,7 @@ async function sendMessage(overrideText?: string) {
       proxyUrl
     })
 
-    session.turns.push({
+    assistantTurn = {
       id: `turn-a-${Date.now()}`,
       role: 'assistant',
       content: res.content,
@@ -458,19 +505,45 @@ async function sendMessage(overrideText?: string) {
       totalTokens: res.totalTokens || null,
       createdAt: Date.now(),
       isError: false
-    })
+    }
+    session.turns.push(assistantTurn)
   } catch (e) {
-    session.turns.push({
+    assistantTurn = {
       id: `turn-a-${Date.now()}`,
       role: 'assistant',
       content: `请求失败：${String(e)}`,
       model,
       createdAt: Date.now(),
       isError: true
-    })
+    }
+    session.turns.push(assistantTurn)
   } finally {
     isGenerating.value = false
     session.updatedAt = Date.now()
+
+    // Ensure that even if the user pressed Cmd+D while this request was in flight,
+    // we merge the completed assistant response into the latest persisted sessions list!
+    try {
+      const latestStored = await kvGet<AiChatSession[]>('ai-studio', 'sessions', [])
+      if (latestStored && latestStored.length > 0 && assistantTurn) {
+        const found = latestStored.find((s) => s.id === targetSessionId)
+        if (found) {
+          if (!found.turns.some((t) => t.id === assistantTurn!.id)) {
+            found.turns.push(assistantTurn)
+            found.updatedAt = Date.now()
+          }
+          sessions.value = latestStored
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    try {
+      localStorage.removeItem(INFLIGHT_STORAGE_KEY)
+    } catch {
+      // ignore
+    }
     await persistSessions()
     scrollToBottom()
   }
@@ -556,22 +629,26 @@ function consumeIncomingPayload() {
     if (parsed?.type === 'handoff-qa' && parsed.question) {
       const s = createNewSession('general')
       s.title = parsed.question.slice(0, 22)
+      if (parsed.isPending || !parsed.answer) {
+        // The question was still loading in main search bar when user pressed Cmd+D / handoff:
+        // Directly send the message inside AI Studio so the live conversation continues here!
+        sendMessage(parsed.question)
+        return
+      }
       s.turns.push({
         id: `turn-u-${Date.now()}-1`,
         role: 'user',
         content: parsed.question,
         createdAt: Date.now() - 1000
       })
-      if (parsed.answer) {
-        s.turns.push({
-          id: `turn-a-${Date.now()}-2`,
-          role: 'assistant',
-          content: parsed.answer,
-          reasoningContent: parsed.reasoningContent || null,
-          model: parsed.model || store.userSettings.aiModelName,
-          createdAt: Date.now()
-        })
-      }
+      s.turns.push({
+        id: `turn-a-${Date.now()}-2`,
+        role: 'assistant',
+        content: parsed.answer,
+        reasoningContent: parsed.reasoningContent || null,
+        model: parsed.model || store.userSettings.aiModelName,
+        createdAt: Date.now()
+      })
       persistSessions()
       scrollToBottom()
       return
@@ -607,7 +684,64 @@ watch(
   }
 )
 
+let inflightPollTimer: ReturnType<typeof setInterval> | null = null
+
+async function reloadSessionsFromKvAndCheckInflight() {
+  const savedSessions = await kvGet<AiChatSession[]>('ai-studio', 'sessions', [])
+  if (savedSessions && savedSessions.length > 0) {
+    sessions.value = savedSessions
+    if (!sessions.value.some((s) => s.id === activeSessionId.value)) {
+      activeSessionId.value = savedSessions[0].id
+      activeRoleId.value = savedSessions[0].roleId || 'general'
+    }
+  }
+
+  try {
+    const rawInflight = localStorage.getItem(INFLIGHT_STORAGE_KEY)
+    if (rawInflight) {
+      const inflight = JSON.parse(rawInflight) as {
+        sessionId: string
+        userTurnId: string
+        startedAt: number
+      }
+      const isFresh = Date.now() - inflight.startedAt < 90_000
+      const targetSess = sessions.value.find((s) => s.id === inflight.sessionId)
+      const lastTurn = targetSess?.turns[targetSess.turns.length - 1]
+      if (isFresh && targetSess && lastTurn?.role === 'user') {
+        activeSessionId.value = targetSess.id
+        activeRoleId.value = targetSess.roleId || 'general'
+        isGenerating.value = true
+        scrollToBottom()
+        return
+      } else {
+        localStorage.removeItem(INFLIGHT_STORAGE_KEY)
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  if (isGenerating.value) {
+    isGenerating.value = false
+    scrollToBottom()
+  }
+}
+
+function handleStorageEvent(e: StorageEvent) {
+  if (e.key === SYNC_SIGNAL_STORAGE_KEY || e.key === INFLIGHT_STORAGE_KEY) {
+    reloadSessionsFromKvAndCheckInflight()
+  }
+}
+
 onMounted(async () => {
+  const winObj = window as unknown as {
+    __omniboxFlushBeforeDetach?: () => Promise<void>
+  }
+  winObj.__omniboxFlushBeforeDetach = async () => {
+    saveUiStateSnapshot()
+    await persistSessions()
+  }
+
   customRoles.value = await kvGet<AiPromptRole[]>('ai-studio', 'custom-roles', [])
   const savedSessions = await kvGet<AiChatSession[]>('ai-studio', 'sessions', [])
   if (savedSessions && savedSessions.length > 0) {
@@ -618,10 +752,67 @@ onMounted(async () => {
     createNewSession('general')
   }
 
+  // Restore last active session, role, tab and draft input across Cmd+D window detach
+  try {
+    const rawUi = localStorage.getItem(UI_STATE_STORAGE_KEY)
+    if (rawUi) {
+      const ui = JSON.parse(rawUi)
+      if (ui.activeSessionId && sessions.value.some((s) => s.id === ui.activeSessionId)) {
+        activeSessionId.value = ui.activeSessionId
+      }
+      if (ui.activeRoleId && allRoles.value.some((r) => r.id === ui.activeRoleId)) {
+        activeRoleId.value = ui.activeRoleId
+      }
+      if (ui.sidebarTab === 'roles' || ui.sidebarTab === 'history') {
+        sidebarTab.value = ui.sidebarTab
+      }
+      if (typeof ui.inputPrompt === 'string' && ui.inputPrompt) {
+        inputPrompt.value = ui.inputPrompt
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // Also check standalone window payload saved in localStorage when spawned via Cmd+D
+  try {
+    const standalonePayload = localStorage.getItem('omnibox:standalone-payload:ai-studio')
+    if (standalonePayload) {
+      localStorage.removeItem('omnibox:standalone-payload:ai-studio')
+      store.pluginInitialPayload = standalonePayload
+    }
+  } catch {
+    // ignore
+  }
+
   if (store.pluginInitialPayload) {
     consumeIncomingPayload()
+  } else {
+    await reloadSessionsFromKvAndCheckInflight()
   }
+
+  window.addEventListener('storage', handleStorageEvent)
+  inflightPollTimer = setInterval(() => {
+    if (isGenerating.value || localStorage.getItem(INFLIGHT_STORAGE_KEY)) {
+      reloadSessionsFromKvAndCheckInflight()
+    }
+  }, 450)
+
   scrollToBottom()
+})
+
+onUnmounted(() => {
+  window.removeEventListener('storage', handleStorageEvent)
+  if (inflightPollTimer) {
+    clearInterval(inflightPollTimer)
+    inflightPollTimer = null
+  }
+  const winObj = window as unknown as {
+    __omniboxFlushBeforeDetach?: () => Promise<void>
+  }
+  if (winObj.__omniboxFlushBeforeDetach) {
+    delete winObj.__omniboxFlushBeforeDetach
+  }
 })
 </script>
 

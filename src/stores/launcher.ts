@@ -276,9 +276,12 @@ export const useLauncherStore = defineStore('launcher', () => {
     }
   }
 
+  let activeQuickAskSeq = 0
+
   async function triggerAiQuickAsk(question: string, customSystemPrompt?: string) {
     const cleanQ = question.replace(/^(\?|？|ai\s+)/i, '').trim()
     if (!cleanQ) return
+    const seq = ++activeQuickAskSeq
     const provider = userSettings.value.aiProvider || 'OpenAI'
     const apiKey = (userSettings.value.aiApiKey || '').trim()
     const baseUrl = (userSettings.value.aiBaseUrl || '').trim().replace(/\/+$/, '')
@@ -326,6 +329,7 @@ export const useLauncherStore = defineStore('launcher', () => {
         temperature: userSettings.value.aiTemperature ?? 0.7,
         proxyUrl
       })
+      if (seq !== activeQuickAskSeq || !aiAnswerState.value) return
       aiAnswerState.value = {
         question: cleanQ,
         answer: res.content,
@@ -337,6 +341,7 @@ export const useLauncherStore = defineStore('launcher', () => {
         error: false
       }
     } catch (e) {
+      if (seq !== activeQuickAskSeq || !aiAnswerState.value) return
       aiAnswerState.value = {
         question: cleanQ,
         answer: `请求 AI 接口失败: ${String(e)}`,
@@ -347,15 +352,23 @@ export const useLauncherStore = defineStore('launcher', () => {
     }
   }
 
-  function continueQuickAskInAiStudio() {
-    if (!aiAnswerState.value) return
-    const handoffPayload = JSON.stringify({
+  function buildQuickAskHandoffPayload(): string | null {
+    if (!aiAnswerState.value) return null
+    const isPending = Boolean(aiAnswerState.value.loading)
+    return JSON.stringify({
       type: 'handoff-qa',
       question: aiAnswerState.value.question,
-      answer: aiAnswerState.value.answer,
+      answer: isPending ? '' : aiAnswerState.value.answer,
+      isPending,
       reasoningContent: aiAnswerState.value.reasoningContent || null,
       model: aiAnswerState.value.model || userSettings.value.aiModelName
     })
+  }
+
+  function continueQuickAskInAiStudio() {
+    const handoffPayload = buildQuickAskHandoffPayload()
+    if (!handoffPayload) return
+    activeQuickAskSeq++
     pluginInitialPayload.value = handoffPayload
     aiAnswerState.value = null
     openPlugin('ai-studio')
@@ -923,6 +936,18 @@ export const useLauncherStore = defineStore('launcher', () => {
     let targetPluginId = activePluginId.value
     let targetExtId = activeExternalPlugin.value?.id || ''
 
+    // If user is currently in main search bar AI Quick Ask (either loading or answered) and presses Cmd+D:
+    // Seamlessly hand off the running/completed QA session into a standalone AI Studio window!
+    if (!targetPluginId && aiAnswerState.value) {
+      const handoffPayload = buildQuickAskHandoffPayload()
+      if (handoffPayload) {
+        activeQuickAskSeq++
+        pluginInitialPayload.value = handoffPayload
+        aiAnswerState.value = null
+        targetPluginId = 'ai-studio'
+      }
+    }
+
     // If in main launcher search list and a plugin is selected, allow detaching that selected plugin directly
     if (!targetPluginId) {
       const current = results.value[selectedIndex.value]
@@ -940,6 +965,17 @@ export const useLauncherStore = defineStore('launcher', () => {
     }
 
     if (targetPluginId) {
+      // Allow active plugin (e.g. AiStudio) to flush its live session state before spawning standalone window
+      try {
+        const flushHook = (
+          window as unknown as { __omniboxFlushBeforeDetach?: () => Promise<void> | void }
+        ).__omniboxFlushBeforeDetach
+        if (flushHook) {
+          await flushHook()
+        }
+      } catch {
+        // ignore hook error
+      }
       const titleMap: Record<string, string> = {
         'calc-pad': '计算稿纸',
         'json-studio': 'JSON 助手',
