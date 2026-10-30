@@ -64,70 +64,75 @@ function escapeHtml(raw: string): string {
 function renderInlineMarkdown(raw: string, isDark: boolean): string {
   if (!raw) return ''
 
-  // 1. Extract inline code spans first so inner symbols (*, _, etc.) are never mutated
-  const codeTokens: string[] = []
+  const savedTokens: string[] = []
+  const saveInlineToken = (html: string) => {
+    const idx = savedTokens.length
+    savedTokens.push(html)
+    return `\u0000INL_${idx}\u0000`
+  }
+
+  // 1. Extract inline code spans (`code`) first so inner symbols (*, _, ~, etc.) are never mutated
   let text = raw.replace(/`([^`\n]+)`/g, (_, codeContent: string) => {
-    const idx = codeTokens.length
     const cls = isDark
       ? 'px-1.5 py-0.5 mx-0.5 rounded-md font-mono text-[11.5px] bg-indigo-500/15 text-indigo-300 border border-indigo-500/25'
       : 'px-1.5 py-0.5 mx-0.5 rounded-md font-mono text-[11.5px] bg-indigo-50/90 text-indigo-700 border border-indigo-200/70'
-    codeTokens.push(`<code class="${cls}">${escapeHtml(codeContent)}</code>`)
-    return `\u0000CODE_${idx}\u0000`
+    return saveInlineToken(`<code class="${cls}">${escapeHtml(codeContent)}</code>`)
   })
 
-  // 2. Escape remaining HTML
-  text = escapeHtml(text)
-
-  // 3. Bold + Italic (`***...***`)
-  text = text.replace(
-    /\*\*\*([^*]+)\*\*\*/g,
-    '<strong class="font-bold italic">$1</strong>'
-  )
-
-  // 4. Bold (`**...**`)
-  const boldCls = isDark
-    ? 'font-semibold text-white'
-    : 'font-semibold text-slate-900'
-  text = text.replace(
-    /\*\*([^*]+)\*\*/g,
-    `<strong class="${boldCls}">$1</strong>`
-  )
-
-  // 5. Italic (`*...*`)
-  text = text.replace(
-    /(^|[^*])\*([^*\n]+)\*(?!\*)/g,
-    '$1<em class="italic opacity-95">$2</em>'
-  )
-
-  // 6. Strikethrough (`~~...~~`)
-  text = text.replace(
-    /~~([^~\n]+)~~/g,
-    '<del class="line-through opacity-65">$1</del>'
-  )
-
-  // 7. Markdown Links (`[text](url)`)
+  // 2. Extract Markdown Links (`[text](url)`) before escaping/formatting so URLs with `~` or `*` are safe
   text = text.replace(
     /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-indigo-500 hover:underline font-medium">$1</a>'
+    (_, label: string, url: string) => {
+      return saveInlineToken(
+        `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" class="text-indigo-500 hover:underline font-medium">${escapeHtml(label)}</a>`
+      )
+    }
   )
 
-  // 8. Restore inline code tokens
-  text = text.replace(/\u0000CODE_(\d+)\u0000/g, (_, idxStr: string) => {
-    return codeTokens[Number(idxStr)] || ''
+  // 3. Escape remaining HTML
+  text = escapeHtml(text)
+
+  // 4. Bold + Italic (`***...***`)
+  text = text.replace(/\*\*\*([^*]+)\*\*\*/g, (_, inner: string) =>
+    saveInlineToken(`<strong class="font-bold italic">${inner}</strong>`)
+  )
+
+  // 5. Bold (`**...**`)
+  const boldCls = isDark ? 'font-semibold text-white' : 'font-semibold text-slate-900'
+  text = text.replace(/\*\*([^*]+)\*\*/g, (_, inner: string) =>
+    saveInlineToken(`<strong class="${boldCls}">${inner}</strong>`)
+  )
+
+  // 6. Italic (`*...*`)
+  text = text.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, (_, pre: string, inner: string) => {
+    return `${pre}${saveInlineToken(`<em class="italic opacity-95">${inner}</em>`)}`
   })
+
+  // 7. Strikethrough (`~~...~~`)
+  text = text.replace(/~~([^~\n]+)~~/g, (_, inner: string) =>
+    saveInlineToken(`<del class="line-through opacity-65">${inner}</del>`)
+  )
+
+  // 8. Restore all inline tokens (run twice in case of nested inline tokens inside bold/italic)
+  for (let pass = 0; pass < 2; pass++) {
+    text = text.replace(/\u0000INL_(\d+)\u0000/g, (_, idxStr: string) => {
+      return savedTokens[Number(idxStr)] || ''
+    })
+  }
 
   return text
 }
 
 /**
- * Lightweight zero-dependency syntax highlighter supporting Light & Dark themes
- * Handles: keywords, strings, comments, numbers, JSON keys, CLI flags, and ASCII tree diagrams
+ * Single-pass lexical syntax highlighter supporting Light & Dark themes.
+ * Scans raw source code in one pass from left to right and escapes HTML per token,
+ * guaranteeing that generated `<span class="...">` tags are NEVER re-matched or corrupted.
  */
 function highlightCodeHtml(code: string, lang: string, isDark: boolean): string {
   if (!code) return ''
   const lowerLang = (lang || 'text').toLowerCase()
 
-  // Special treatment for ASCII architecture / tree diagrams (`├──`, `└──`, `│`, `───>`)
+  // 1. Special single-pass treatment for ASCII architecture / tree diagrams (`├──`, `└──`, `│`, `───>`)
   if (
     lowerLang === 'text' ||
     lowerLang === 'txt' ||
@@ -135,84 +140,137 @@ function highlightCodeHtml(code: string, lang: string, isDark: boolean): string 
     lowerLang === 'ascii' ||
     /[├└│─┌┐┘┬┴┼]/.test(code)
   ) {
-    const escaped = escapeHtml(code)
     const treeSymCls = isDark ? 'text-indigo-400 font-bold' : 'text-indigo-600 font-bold'
     const protoCls = isDark ? 'text-emerald-400 font-semibold' : 'text-emerald-700 font-semibold'
     const numCls = isDark ? 'text-amber-300' : 'text-amber-700 font-medium'
-    return escaped
-      .replace(/([├└│─┌┐┘┬┴┼]+|---+&gt;|===+&gt;|&lt;---+)/g, `<span class="${treeSymCls}">$1</span>`)
-      .replace(
-        /\b(HTTP\/[123](?:\.\d)?|QUIC|TCP|UDP|TLS(?:\s*1\.[23])?|IPv[46]|DNS|Stream(?:\s*\d+)?|HTML|CSS|JavaScript|JSON|SQL)\b/g,
-        `<span class="${protoCls}">$1</span>`
-      )
-      .replace(/\b(\d+(?:\.\d+)?(?:ms|s|MB|GB|KB|%)?)\b/g, `<span class="${numCls}">$1</span>`)
+
+    const asciiRegex =
+      /([├└│─┌┐┘┬┴┼]+|---+>|===+>|<---+)|(\b(?:HTTP\/[123](?:\.\d)?|QUIC|TCP|UDP|TLS(?:\s*1\.[23])?|IPv[46]|DNS|Stream(?:\s*\d+)?|HTML|CSS|JavaScript|JSON|SQL)\b)|(\b\d+(?:\.\d+)?(?:ms|s|MB|GB|KB|%)?\b)/g
+
+    let out = ''
+    let lastIdx = 0
+    let m: RegExpExecArray | null
+    while ((m = asciiRegex.exec(code)) !== null) {
+      if (m.index > lastIdx) {
+        out += escapeHtml(code.slice(lastIdx, m.index))
+      }
+      const full = escapeHtml(m[0])
+      if (m[1]) {
+        out += `<span class="${treeSymCls}">${full}</span>`
+      } else if (m[2]) {
+        out += `<span class="${protoCls}">${full}</span>`
+      } else {
+        out += `<span class="${numCls}">${full}</span>`
+      }
+      lastIdx = asciiRegex.lastIndex
+    }
+    if (lastIdx < code.length) {
+      out += escapeHtml(code.slice(lastIdx))
+    }
+    return out
   }
 
-  // Tokenize comments and strings first to protect them from keyword replacement
-  const savedTokens: string[] = []
-  const saveToken = (html: string) => {
-    const id = savedTokens.length
-    savedTokens.push(html)
-    return `\u0000TOK_${id}\u0000`
-  }
-
-  let work = escapeHtml(code)
-
+  // 2. Single-pass lexical scanner for programming languages & shell scripts
   const commentCls = isDark ? 'text-slate-500 italic' : 'text-slate-400 italic'
   const stringCls = isDark ? 'text-emerald-300' : 'text-emerald-700'
   const keyCls = isDark ? 'text-sky-300 font-medium' : 'text-sky-700 font-medium'
   const keywordCls = isDark ? 'text-violet-400 font-semibold' : 'text-purple-700 font-semibold'
   const numCls = isDark ? 'text-amber-300' : 'text-amber-700'
   const fnCls = isDark ? 'text-indigo-300' : 'text-indigo-700'
-  const flagCls = isDark ? 'text-cyan-300' : 'text-teal-700'
+  const flagCls = isDark ? 'text-cyan-300 font-medium' : 'text-teal-700 font-medium'
 
-  // 1. Comments (`// ...`, `# ...` for bash/python/yaml, `-- ...` for sql)
-  if (['bash', 'sh', 'zsh', 'shell', 'python', 'py', 'yaml', 'yml', 'toml', 'dockerfile'].includes(lowerLang)) {
-    work = work.replace(/(^|\s)(#[^\n]*)/gm, (_, pre, cmt) => {
-      return `${pre}${saveToken(`<span class="${commentCls}">${cmt}</span>`)}`
-    })
-  } else if (lowerLang === 'sql') {
-    work = work.replace(/(--[^\n]*)/gm, (cmt) => saveToken(`<span class="${commentCls}">${cmt}</span>`))
-  } else if (lowerLang !== 'json') {
-    work = work.replace(/(\/\/[^\n]*|\/\*[\s\S]*?\*\/)/gm, (cmt) =>
-      saveToken(`<span class="${commentCls}">${cmt}</span>`)
-    )
-  }
+  const isHashCommentLang = [
+    'bash',
+    'sh',
+    'zsh',
+    'shell',
+    'console',
+    'python',
+    'py',
+    'yaml',
+    'yml',
+    'toml',
+    'dockerfile',
+    'conf',
+    'ini'
+  ].includes(lowerLang)
+  const isSqlLang = lowerLang === 'sql'
+  const isJsonLang = lowerLang === 'json'
 
-  // 2. JSON keys (`"key":`)
-  if (['json', 'jsonc', 'js', 'ts', 'javascript', 'typescript'].includes(lowerLang)) {
-    work = work.replace(/(&quot;[^&\n]*?&quot;)(\s*:)/g, (_, k, colon) => {
-      return `${saveToken(`<span class="${keyCls}">${k}</span>`)}${colon}`
-    })
-  }
+  // Build comment pattern branch based on language
+  const commentBranch = isJsonLang
+    ? '(?!x)x'
+    : isHashCommentLang
+      ? '(#[^\\n]*)'
+      : isSqlLang
+        ? '(--[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/)'
+        : '(\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/)'
 
-  // 3. Strings (`"..."` and `'...'`)
-  work = work.replace(/(&quot;[^&\n]*?&quot;|&#39;[^&\n]*?&#39;|`[^`\n]*?`)/g, (str) =>
-    saveToken(`<span class="${stringCls}">${str}</span>`)
+  // Group 1: Comment
+  // Group 2: JSON / Object Key (`"key"` before `:`)
+  // Group 3: String literal (`"..."`, `'...'`, `` `...` ``)
+  // Group 4: Leading whitespace before CLI flag (so `-nP` in `lsof -nP` is matched cleanly, while `a-b` is not)
+  // Group 5: CLI flag (`-nP`, `-iTCP`, `-sTCP:LISTEN`, `--max-time`)
+  // Group 6: Language Keyword / Shell Command
+  // Group 7: Function call identifier (`foo` before `(`)
+  // Group 8: Number literal (`123`, `0x1f`, `3.14`)
+  const tokenRegex = new RegExp(
+    [
+      commentBranch,
+      '("(?:\\\\.|[^"\\\\\\n])*"(?=\\s*:))',
+      '("(?:\\\\.|[^"\\\\\\n])*"|\'(?:\\\\.|[^\'\\\\\\n])*\'|`(?:\\\\.|[^`\\\\\\n])*`)',
+      '((?:^|[ \\t])+)(--?[a-zA-Z0-9_.:=-]+)',
+      '\\b(const|let|var|function|return|async|await|if|else|for|while|switch|case|break|continue|import|from|export|default|interface|type|class|extends|implements|new|try|catch|finally|throw|true|false|null|undefined|def|elif|except|lambda|yield|with|as|pass|None|True|False|fn|pub|mut|impl|struct|enum|match|use|mod|where|SELECT|FROM|WHERE|INSERT|INTO|UPDATE|SET|DELETE|JOIN|LEFT|INNER|ON|GROUP|BY|ORDER|LIMIT|AS|AND|OR|NOT|NULL|CREATE|TABLE|DROP|ALTER|INDEX|sudo|lsof|netstat|ss|ps|top|htop|kill|killall|pkill|curl|wget|grep|egrep|awk|sed|cat|head|tail|less|echo|printf|cd|ls|pwd|cp|mv|rm|mkdir|chmod|chown|find|xargs|sort|uniq|wc|tar|zip|unzip|ssh|scp|rsync|git|docker|kubectl|npm|pnpm|yarn|cargo|brew|systemctl|journalctl|ifconfig|ip|ping|dig|nslookup|nc|telnet|openssl|python3?|node|go)\\b',
+      '\\b([a-zA-Z_][a-zA-Z0-9_]*)(?=\\s*\\()',
+      '\\b(0x[0-9a-fA-F]+|\\d+(?:\\.\\d+)?)\\b'
+    ].join('|'),
+    'gm'
   )
 
-  // 4. CLI flags (`--flag` / `-f`) for shell
-  if (['bash', 'sh', 'zsh', 'shell', 'console'].includes(lowerLang)) {
-    work = work.replace(/(\s)(--?[a-zA-Z0-9_-]+)/g, `$1<span class="${flagCls}">$2</span>`)
+  let out = ''
+  let lastIdx = 0
+  let match: RegExpExecArray | null
+
+  while ((match = tokenRegex.exec(code)) !== null) {
+    if (match.index > lastIdx) {
+      out += escapeHtml(code.slice(lastIdx, match.index))
+    }
+
+    if (match[1] !== undefined) {
+      // Comment
+      out += `<span class="${commentCls}">${escapeHtml(match[1])}</span>`
+    } else if (match[2] !== undefined) {
+      // JSON / Object key
+      out += `<span class="${keyCls}">${escapeHtml(match[2])}</span>`
+    } else if (match[3] !== undefined) {
+      // String literal
+      out += `<span class="${stringCls}">${escapeHtml(match[3])}</span>`
+    } else if (match[5] !== undefined) {
+      // CLI flag with leading whitespace
+      const lead = escapeHtml(match[4] || '')
+      const flag = escapeHtml(match[5])
+      out += `${lead}<span class="${flagCls}">${flag}</span>`
+    } else if (match[6] !== undefined) {
+      // Keyword or Shell command
+      out += `<span class="${keywordCls}">${escapeHtml(match[6])}</span>`
+    } else if (match[7] !== undefined) {
+      // Function call
+      out += `<span class="${fnCls}">${escapeHtml(match[7])}</span>`
+    } else if (match[8] !== undefined) {
+      // Number literal
+      out += `<span class="${numCls}">${escapeHtml(match[8])}</span>`
+    } else {
+      out += escapeHtml(match[0])
+    }
+
+    lastIdx = tokenRegex.lastIndex
   }
 
-  // 5. Language keywords
-  const kwRegex =
-    /\b(const|let|var|function|return|async|await|if|else|for|while|switch|case|break|continue|import|from|export|default|interface|type|class|extends|implements|new|try|catch|finally|throw|true|false|null|undefined|def|elif|except|lambda|yield|with|as|pass|None|True|False|fn|pub|mut|impl|struct|enum|match|use|mod|where|SELECT|FROM|WHERE|INSERT|INTO|UPDATE|SET|DELETE|JOIN|LEFT|INNER|ON|GROUP|BY|ORDER|LIMIT|AS|AND|OR|NOT|NULL|CREATE|TABLE|DROP|ALTER|INDEX|curl|sudo|grep|awk|sed|cat|echo|cd|ls|git|docker|npm|pnpm|cargo|python3?)\b/g
-  work = work.replace(kwRegex, `<span class="${keywordCls}">$1</span>`)
+  if (lastIdx < code.length) {
+    out += escapeHtml(code.slice(lastIdx))
+  }
 
-  // 6. Numbers
-  work = work.replace(/\b(\d+(?:\.\d+)?)\b/g, `<span class="${numCls}">$1</span>`)
-
-  // 7. Function calls (`foo(`)
-  work = work.replace(/\b([a-zA-Z_][a-zA-Z0-9_]*)(?=\s*\()/g, `<span class="${fnCls}">$1</span>`)
-
-  // 8. Restore saved tokens
-  work = work.replace(/\u0000TOK_(\d+)\u0000/g, (_, idStr: string) => {
-    return savedTokens[Number(idStr)] || ''
-  })
-
-  return work
+  return out
 }
 
 function parseTableRow(line: string): string[] {

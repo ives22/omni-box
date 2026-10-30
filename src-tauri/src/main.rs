@@ -155,6 +155,52 @@ extern "C" fn omnibox_panel_can_become_main(
 }
 
 #[cfg(target_os = "macos")]
+extern "C" fn omnibox_standalone_can_become_main(
+    _self: *mut std::ffi::c_void,
+    _cmd: *mut std::ffi::c_void,
+) -> i8 {
+    1 // YES: Standalone detached window is a first-class macOS Main Window for Cmd+Tab & Dock!
+}
+
+#[cfg(target_os = "macos")]
+fn get_or_register_standalone_window_class() -> *mut std::ffi::c_void {
+    unsafe {
+        let existing = objc_getClass(b"OmniBoxStandaloneWindow\0".as_ptr() as _);
+        if !existing.is_null() {
+            return existing;
+        }
+        let nswin_cls = objc_getClass(b"NSWindow\0".as_ptr() as _);
+        let win_cls =
+            objc_allocateClassPair(nswin_cls, b"OmniBoxStandaloneWindow\0".as_ptr() as _, 0);
+        if !win_cls.is_null() {
+            let _ = class_addIvar(
+                win_cls,
+                b"focusable\0".as_ptr() as _,
+                1,
+                0,
+                b"B\0".as_ptr() as _,
+            );
+            let sel_key = sel_registerName(b"canBecomeKeyWindow\0".as_ptr() as _);
+            let _ = class_addMethod(
+                win_cls,
+                sel_key,
+                omnibox_panel_can_become_key as *const std::ffi::c_void,
+                b"B@:\0".as_ptr() as _,
+            );
+            let sel_main = sel_registerName(b"canBecomeMainWindow\0".as_ptr() as _);
+            let _ = class_addMethod(
+                win_cls,
+                sel_main,
+                omnibox_standalone_can_become_main as *const std::ffi::c_void,
+                b"B@:\0".as_ptr() as _,
+            );
+            objc_registerClassPair(win_cls);
+        }
+        win_cls
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn get_or_register_omnibox_panel_class() -> *mut std::ffi::c_void {
     unsafe {
         let existing = objc_getClass(b"OmniBoxFullscreenPanel\0".as_ptr() as _);
@@ -197,7 +243,9 @@ fn get_or_register_omnibox_panel_class() -> *mut std::ffi::c_void {
 /// When standalone detached windows exist, keep Regular (0) so user can switch back via Command+Tab / Dock!
 #[cfg(target_os = "macos")]
 fn ensure_macos_accessory_policy() {
-    if DETACHED_WINDOW_COUNT.load(Ordering::Relaxed) > 0 {
+    if DETACHED_WINDOW_COUNT.load(Ordering::Relaxed) > 0
+        || IS_DETACHED_WINDOW.load(Ordering::Relaxed)
+    {
         return;
     }
     use std::ffi::c_void;
@@ -220,6 +268,29 @@ fn ensure_macos_accessory_policy() {
                 let _ = send_bool_isize(ns_app, sel_set_policy, 1);
             }
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn is_macos_app_active() -> bool {
+    use std::ffi::c_void;
+    unsafe {
+        let send_id: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        let send_bool: unsafe extern "C" fn(*mut c_void, *mut c_void) -> i8 =
+            std::mem::transmute(objc_msgSend as *const ());
+
+        let app_cls = objc_getClass(b"NSApplication\0".as_ptr() as _);
+        if app_cls.is_null() {
+            return false;
+        }
+        let sel_shared = sel_registerName(b"sharedApplication\0".as_ptr() as _);
+        let ns_app = send_id(app_cls, sel_shared);
+        if ns_app.is_null() {
+            return false;
+        }
+        let sel_active = sel_registerName(b"isActive\0".as_ptr() as _);
+        send_bool(ns_app, sel_active) != 0
     }
 }
 
@@ -308,6 +379,105 @@ fn set_macos_regular_policy_and_activate() {
             let sel_activate = sel_registerName(b"activateIgnoringOtherApps:\0".as_ptr() as _);
             send_void_bool(ns_app, sel_activate, 1);
         }
+    }
+}
+
+/// Bring a standalone NSWindow to the front of all other application windows (including Chrome/browsers)
+#[cfg(target_os = "macos")]
+fn raise_standalone_nswindow_to_front(ns_win: *mut std::ffi::c_void) {
+    use std::ffi::c_void;
+    if ns_win.is_null() {
+        return;
+    }
+    unsafe {
+        let send_void: unsafe extern "C" fn(*mut c_void, *mut c_void) =
+            std::mem::transmute(objc_msgSend as *const ());
+        let send_void_ptr: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
+            std::mem::transmute(objc_msgSend as *const ());
+        let send_bool: unsafe extern "C" fn(*mut c_void, *mut c_void) -> i8 =
+            std::mem::transmute(objc_msgSend as *const ());
+
+        set_macos_regular_policy_and_activate();
+
+        let sel_is_mini = sel_registerName(b"isMiniaturized\0".as_ptr() as _);
+        if send_bool(ns_win, sel_is_mini) != 0 {
+            let sel_demini = sel_registerName(b"deminiaturize:\0".as_ptr() as _);
+            send_void_ptr(ns_win, sel_demini, std::ptr::null_mut());
+        }
+
+        let sel_order_front = sel_registerName(b"orderFrontRegardless\0".as_ptr() as _);
+        send_void(ns_win, sel_order_front);
+
+        let sel_key_front = sel_registerName(b"makeKeyAndOrderFront:\0".as_ptr() as _);
+        send_void_ptr(ns_win, sel_key_front, std::ptr::null_mut());
+
+        let sel_make_main = sel_registerName(b"makeMainWindow\0".as_ptr() as _);
+        send_void(ns_win, sel_make_main);
+
+        let sel_make_key = sel_registerName(b"makeKeyWindow\0".as_ptr() as _);
+        send_void(ns_win, sel_make_key);
+
+        focus_webview_first_responder(ns_win);
+    }
+}
+
+/// Raise all active detached windows to the front when user switches back via Command+Tab or Dock click
+fn bring_all_detached_windows_to_front(app_handle: &AppHandle, unminimize_all: bool) -> bool {
+    let mut found = false;
+    for (label, win) in app_handle.webview_windows() {
+        if label.starts_with("detached_") {
+            found = true;
+            if unminimize_all {
+                let _ = win.unminimize();
+            }
+            let _ = win.show();
+            #[cfg(target_os = "macos")]
+            if let Ok(ns_win) = win.ns_window() {
+                if !ns_win.is_null() {
+                    unsafe {
+                        use std::ffi::c_void;
+                        let send_bool: unsafe extern "C" fn(*mut c_void, *mut c_void) -> i8 =
+                            std::mem::transmute(objc_msgSend as *const ());
+                        let sel_is_mini = sel_registerName(b"isMiniaturized\0".as_ptr() as _);
+                        let is_mini = send_bool(ns_win, sel_is_mini) != 0;
+                        if unminimize_all || !is_mini {
+                            raise_standalone_nswindow_to_front(ns_win);
+                        }
+                    }
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = win.set_focus();
+            }
+            let _ = win.eval("window.dispatchEvent(new Event('focus'))");
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if found {
+        let _ = app_handle.set_activation_policy(tauri::ActivationPolicy::Regular);
+    }
+    found
+}
+
+/// Synchronize macOS Dock & Cmd+Tab visibility based on live `detached_*` windows
+#[cfg(target_os = "macos")]
+fn sync_macos_activation_policy(app_handle: &AppHandle, excluding_label: Option<&str>) {
+    let count = app_handle
+        .webview_windows()
+        .keys()
+        .filter(|k| {
+            k.starts_with("detached_")
+                && excluding_label.map(|ex| *k != ex).unwrap_or(true)
+        })
+        .count() as u32;
+    DETACHED_WINDOW_COUNT.store(count, Ordering::Relaxed);
+    if count > 0 || IS_DETACHED_WINDOW.load(Ordering::Relaxed) {
+        let _ = app_handle.set_activation_policy(tauri::ActivationPolicy::Regular);
+        set_macos_regular_policy_and_activate();
+    } else {
+        let _ = app_handle.set_activation_policy(tauri::ActivationPolicy::Accessory);
+        ensure_macos_accessory_policy();
     }
 }
 
@@ -1268,15 +1438,7 @@ fn close_current_window(window: tauri::Window, app_handle: AppHandle) -> Result<
 
     #[cfg(target_os = "macos")]
     {
-        let remaining_detached = app_handle
-            .webview_windows()
-            .keys()
-            .filter(|k| k.starts_with("detached_") && **k != label)
-            .count() as u32;
-        DETACHED_WINDOW_COUNT.store(remaining_detached, Ordering::Relaxed);
-        if remaining_detached == 0 {
-            ensure_macos_accessory_policy();
-        }
+        sync_macos_activation_policy(&app_handle, Some(&label));
     }
     Ok(())
 }
@@ -1288,27 +1450,39 @@ fn configure_standalone_nswindow(ns_win: *mut std::ffi::c_void, width: f64, heig
         return;
     }
     unsafe {
+        let send_void_usize: unsafe extern "C" fn(*mut c_void, *mut c_void, usize) =
+            std::mem::transmute(objc_msgSend as *const ());
         let send_void_isize: unsafe extern "C" fn(*mut c_void, *mut c_void, isize) =
             std::mem::transmute(objc_msgSend as *const ());
         let send_void_bool: unsafe extern "C" fn(*mut c_void, *mut c_void, i8) =
             std::mem::transmute(objc_msgSend as *const ());
-        let send_void: unsafe extern "C" fn(*mut c_void, *mut c_void) =
-            std::mem::transmute(objc_msgSend as *const ());
-        let send_void_ptr: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void) =
-            std::mem::transmute(objc_msgSend as *const ());
         let send_set_frame: unsafe extern "C" fn(*mut c_void, *mut c_void, CGRect, i8) =
             std::mem::transmute(objc_msgSend as *const ());
+
+        // 0. Upgrade ISA to OmniBoxStandaloneWindow so canBecomeMainWindow == YES (required for Cmd+Tab & Dock!)
+        let standalone_cls = get_or_register_standalone_window_class();
+        if !standalone_cls.is_null() && object_getClass(ns_win) != standalone_cls {
+            let _ = object_setClass(ns_win, standalone_cls);
+        }
 
         // 1. Crucial: Never hide or close when clicking other applications!
         let sel_hides = sel_registerName(b"setHidesOnDeactivate:\0".as_ptr() as _);
         send_void_bool(ns_win, sel_hides, 0);
 
-        // 2. Default to normal window level (0 = NSNormalWindowLevel) so it does NOT stay in front of
+        // 2. Participate in macOS Managed Window Cycle (Cmd+Tab, Cmd+~, Mission Control, Stage Manager)
+        //    NSWindowCollectionBehaviorManaged (1 << 2)
+        //    | NSWindowCollectionBehaviorParticipatesInCycle (1 << 5)
+        //    | NSWindowCollectionBehaviorFullScreenAuxiliary (1 << 8)
+        let behavior: usize = (1 << 2) | (1 << 5) | (1 << 8);
+        let sel_behavior = sel_registerName(b"setCollectionBehavior:\0".as_ptr() as _);
+        send_void_usize(ns_win, sel_behavior, behavior);
+
+        // 3. Default to normal window level (0 = NSNormalWindowLevel) so it does NOT stay in front of
         //    other apps when user clicks other apps (unless user explicitly clicks Pin 📌)
         let sel_level = sel_registerName(b"setLevel:\0".as_ptr() as _);
         send_void_isize(ns_win, sel_level, 0);
 
-        // 3. Center on the current active mouse display
+        // 4. Center on the current active mouse display
         let (_, bounds, main_h) = get_mouse_display_bounds();
         let cg_x = bounds.origin.x + (bounds.size.width - width) / 2.0;
         let cg_top_y = bounds.origin.y + (bounds.size.height - height) * 0.42;
@@ -1322,16 +1496,8 @@ fn configure_standalone_nswindow(ns_win: *mut std::ffi::c_void, width: f64, heig
         let sel_set_frame = sel_registerName(b"setFrame:display:\0".as_ptr() as _);
         send_set_frame(ns_win, sel_set_frame, new_frame, 1);
 
-        // 4. Activate application and bring standalone window to front
-        set_macos_regular_policy_and_activate();
-
-        let sel_key_front = sel_registerName(b"makeKeyAndOrderFront:\0".as_ptr() as _);
-        send_void_ptr(ns_win, sel_key_front, std::ptr::null_mut());
-
-        let sel_make_key = sel_registerName(b"makeKeyWindow\0".as_ptr() as _);
-        send_void(ns_win, sel_make_key);
-
-        focus_webview_first_responder(ns_win);
+        // 5. Activate application in Dock / Cmd+Tab and bring standalone window to front
+        raise_standalone_nswindow_to_front(ns_win);
     }
 }
 
@@ -1352,6 +1518,52 @@ async fn spawn_detached_plugin_window(
             }
         })
         .collect();
+
+    // 0. If an independent window for this exact plugin is ALREADY open, reuse & bring it to the front!
+    let prefix = format!("detached_{}_", safe_id);
+    if let Some((existing_label, existing_win)) = app_handle
+        .webview_windows()
+        .into_iter()
+        .find(|(k, _)| k.starts_with(&prefix))
+    {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = app_handle.set_activation_policy(tauri::ActivationPolicy::Regular);
+            DETACHED_WINDOW_COUNT.store(
+                app_handle
+                    .webview_windows()
+                    .keys()
+                    .filter(|k| k.starts_with("detached_"))
+                    .count() as u32,
+                Ordering::Relaxed,
+            );
+        }
+        let handle_for_reuse = app_handle.clone();
+        let _ = app_handle.run_on_main_thread(move || {
+            if let Some(main_win) = handle_for_reuse.get_webview_window("main") {
+                let _ = main_win
+                    .eval("window.__omniboxResetState && window.__omniboxResetState()");
+                #[cfg(target_os = "macos")]
+                if let Ok(ns_main) = main_win.ns_window() {
+                    hide_nswindow_native(ns_main);
+                }
+                let _ = main_win.hide();
+            }
+            let _ = existing_win.unminimize();
+            let _ = existing_win.show();
+            #[cfg(target_os = "macos")]
+            if let Ok(ns_win) = existing_win.ns_window() {
+                raise_standalone_nswindow_to_front(ns_win);
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = existing_win.set_focus();
+            }
+            let _ = existing_win.eval("window.dispatchEvent(new Event('focus'))");
+        });
+        return Ok(existing_label);
+    }
+
     let label = format!("detached_{}_{}", safe_id, now_unix_ms() % 1_000_000);
     let mut url_str = format!("index.html?standalone={}", plugin_id);
     if let Some(eid) = ext_id {
@@ -1361,7 +1573,10 @@ async fn spawn_detached_plugin_window(
     }
 
     #[cfg(target_os = "macos")]
-    DETACHED_WINDOW_COUNT.fetch_add(1, Ordering::Relaxed);
+    {
+        DETACHED_WINDOW_COUNT.fetch_add(1, Ordering::Relaxed);
+        let _ = app_handle.set_activation_policy(tauri::ActivationPolicy::Regular);
+    }
 
     // 1. Build a truly independent WebviewWindow first (default always_on_top = false)
     let win = tauri::WebviewWindowBuilder::new(
@@ -1384,10 +1599,27 @@ async fn spawn_detached_plugin_window(
     .build()
     .map_err(|e| e.to_string())?;
 
-    // 2. Hide and reset the main launcher overlay window after standalone window is created
+    // Track native window destruction so Dock icon policy always stays in sync
+    #[cfg(target_os = "macos")]
+    {
+        let handle_for_destroy = app_handle.clone();
+        let label_for_destroy = label.clone();
+        win.on_window_event(move |event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                sync_macos_activation_policy(&handle_for_destroy, Some(&label_for_destroy));
+            }
+        });
+    }
+
+    // 2. Configure standalone window & Dock icon FIRST, then hide main overlay, then re-assert focus!
     let handle_for_main = app_handle.clone();
     let win_clone = win.clone();
     let _ = app_handle.run_on_main_thread(move || {
+        #[cfg(target_os = "macos")]
+        if let Ok(ns_win) = win_clone.ns_window() {
+            configure_standalone_nswindow(ns_win, 1040.0, 680.0);
+        }
+
         if let Some(main_win) = handle_for_main.get_webview_window("main") {
             let _ = main_win
                 .eval("window.__omniboxResetState && window.__omniboxResetState()");
@@ -1400,7 +1632,7 @@ async fn spawn_detached_plugin_window(
 
         #[cfg(target_os = "macos")]
         if let Ok(ns_win) = win_clone.ns_window() {
-            configure_standalone_nswindow(ns_win, 1040.0, 680.0);
+            raise_standalone_nswindow_to_front(ns_win);
         }
     });
 
@@ -1636,6 +1868,7 @@ fn spawn_macos_global_hotkey_listener(app_handle: AppHandle, hotkey_ref: Arc<Mut
         let mut prev_opt_space_down = false;
         let mut prev_esc_down = false;
         let mut prev_mouse_down = false;
+        let mut prev_app_active = is_macos_app_active();
         let mut last_trigger_at = Instant::now() - Duration::from_secs(2);
         let mut tick_counter: u64 = 0;
 
@@ -1654,6 +1887,28 @@ fn spawn_macos_global_hotkey_listener(app_handle: AppHandle, hotkey_ref: Arc<Mut
 
             if tick_counter % 10 == 0 {
                 check_macos_pasteboard_change();
+            }
+
+            // Detect Command+Tab or Dock activation (`[NSApp isActive]` transitioning false -> true)
+            // and automatically raise all standalone detached windows above Chrome / background apps!
+            if tick_counter % 3 == 0 {
+                let cur_app_active = is_macos_app_active();
+                if !prev_app_active
+                    && cur_app_active
+                    && DETACHED_WINDOW_COUNT.load(Ordering::Relaxed) > 0
+                {
+                    let handle_for_activate = app_handle.clone();
+                    let _ = app_handle.run_on_main_thread(move || {
+                        let main_visible = handle_for_activate
+                            .get_webview_window("main")
+                            .and_then(|w| w.is_visible().ok())
+                            .unwrap_or(false);
+                        if !main_visible {
+                            let _ = bring_all_detached_windows_to_front(&handle_for_activate, false);
+                        }
+                    });
+                }
+                prev_app_active = cur_app_active;
             }
 
             unsafe {
@@ -3825,15 +4080,7 @@ fn main() {
                 }
             }
             tauri::RunEvent::Reopen { .. } => {
-                let mut brought_detached = false;
-                for (label, win) in app_handle.webview_windows() {
-                    if label.starts_with("detached_") {
-                        let _ = win.unminimize();
-                        let _ = win.show();
-                        let _ = win.set_focus();
-                        brought_detached = true;
-                    }
-                }
+                let brought_detached = bring_all_detached_windows_to_front(app_handle, true);
                 if !brought_detached {
                     if let Some(win) = app_handle.get_webview_window("main") {
                         let _ = win.unminimize();
