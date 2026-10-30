@@ -10,6 +10,7 @@ import {
 } from '@/bridge/backend'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import IconRenderer from '@/components/IconRenderer.vue'
+import AiMarkdownRenderer from '@/components/AiMarkdownRenderer.vue'
 
 export interface AiPromptRole {
   id: string
@@ -41,12 +42,6 @@ export interface AiChatSession {
   roleId: string
   updatedAt: number
   turns: AiChatTurn[]
-}
-
-interface ParsedBlock {
-  type: 'text' | 'code'
-  lang?: string
-  content: string
 }
 
 const BUILTIN_ROLES: AiPromptRole[] = [
@@ -195,6 +190,54 @@ const newRoleName = ref('')
 const newRoleBadge = ref('自定义')
 const newRoleDesc = ref('')
 const newRoleSysPrompt = ref('')
+
+// Sidebar Hover Preview Popover State
+const hoveredRole = ref<AiPromptRole | null>(null)
+const hoveredSession = ref<AiChatSession | null>(null)
+const hoverPopoverTop = ref<number>(72)
+const hoverPopoverLeft = ref<number>(246)
+let hoverTimer: ReturnType<typeof setTimeout> | null = null
+
+function onRoleMouseEnter(role: AiPromptRole, e: MouseEvent) {
+  if (hoverTimer) clearTimeout(hoverTimer)
+  const el = e.currentTarget as HTMLElement | null
+  if (el) {
+    const rect = el.getBoundingClientRect()
+    hoverPopoverTop.value = Math.max(56, Math.min(window.innerHeight - 230, rect.top))
+    hoverPopoverLeft.value = Math.round(rect.right + 8)
+  }
+  hoverTimer = setTimeout(() => {
+    hoveredSession.value = null
+    hoveredRole.value = role
+  }, 110)
+}
+
+function onSessionMouseEnter(sess: AiChatSession, e: MouseEvent) {
+  if (hoverTimer) clearTimeout(hoverTimer)
+  const el = e.currentTarget as HTMLElement | null
+  if (el) {
+    const rect = el.getBoundingClientRect()
+    hoverPopoverTop.value = Math.max(56, Math.min(window.innerHeight - 230, rect.top))
+    hoverPopoverLeft.value = Math.round(rect.right + 8)
+  }
+  hoverTimer = setTimeout(() => {
+    hoveredRole.value = null
+    hoveredSession.value = sess
+  }, 110)
+}
+
+function clearSidebarHover() {
+  if (hoverTimer) {
+    clearTimeout(hoverTimer)
+    hoverTimer = null
+  }
+  hoveredRole.value = null
+  hoveredSession.value = null
+}
+
+function resolveRoleName(roleId: string): string {
+  return allRoles.value.find((r) => r.id === roleId)?.name || '全能极客助手'
+}
 
 const allRoles = computed<AiPromptRole[]>(() => [
   ...BUILTIN_ROLES,
@@ -665,41 +708,6 @@ function handleInputKeydown(e: KeyboardEvent) {
   }
 }
 
-/**
- * Parse Markdown message content into structured text and fenced code blocks (` ```lang ... ``` `)
- */
-function parseMessageBlocks(raw: string): ParsedBlock[] {
-  if (!raw) return []
-  const blocks: ParsedBlock[] = []
-  const regex = /```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```/g
-  let lastIdx = 0
-  let match: RegExpExecArray | null
-
-  while ((match = regex.exec(raw)) !== null) {
-    if (match.index > lastIdx) {
-      const textPart = raw.slice(lastIdx, match.index).trim()
-      if (textPart) {
-        blocks.push({ type: 'text', content: textPart })
-      }
-    }
-    blocks.push({
-      type: 'code',
-      lang: (match[1] || 'code').toLowerCase(),
-      content: (match[2] || '').replace(/\n$/, '')
-    })
-    lastIdx = regex.lastIndex
-  }
-
-  if (lastIdx < raw.length) {
-    const rest = raw.slice(lastIdx).trim()
-    if (rest) {
-      blocks.push({ type: 'text', content: rest })
-    }
-  }
-
-  return blocks.length > 0 ? blocks : [{ type: 'text', content: raw }]
-}
-
 function sendCodeToPlugin(code: string, targetPlugin: 'json-studio' | 'diff-viewer' | 'calc-pad') {
   store.pluginInitialPayload = code
   store.openPlugin(targetPlugin)
@@ -961,15 +969,16 @@ onUnmounted(() => {
     :class="store.isDark ? 'bg-[#0B0F19] text-slate-100' : 'bg-[#F8FAFC] text-slate-800'"
   >
     <!-- ========================================================================= -->
-    <!-- Left Sidebar: Prompt Roles & Multi-Turn Session History (`210px`)         -->
+    <!-- Left Sidebar: Prompt Roles & Multi-Turn Session History (`238px`)         -->
     <!-- ========================================================================= -->
     <aside
-      class="w-[215px] border-r flex flex-col justify-between shrink-0"
+      class="w-[238px] border-r flex flex-col justify-between shrink-0 relative"
       :class="
         store.isDark
           ? 'bg-[#080C14] border-slate-800/80'
           : 'bg-[#F1F5F9]/85 border-slate-200/85'
       "
+      @mouseleave="clearSidebarHover"
     >
       <!-- Top Segmented Switcher (Roles vs History) -->
       <div class="p-2.5 border-b" :class="store.isDark ? 'border-slate-800/80' : 'border-slate-200/80'">
@@ -991,7 +1000,12 @@ onUnmounted(() => {
                   : 'bg-white text-indigo-600 shadow-2xs'
                 : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
             "
-            @click="sidebarTab = 'roles'"
+            @click="
+              () => {
+                clearSidebarHover()
+                sidebarTab = 'roles'
+              }
+            "
           >
             角色指令 ({{ allRoles.length }})
           </button>
@@ -1002,10 +1016,15 @@ onUnmounted(() => {
               sidebarTab === 'history'
                 ? store.isDark
                   ? 'bg-indigo-500/25 text-indigo-300'
-                  : 'bg-white text-indigo-600 shadow-2xs'
+                : 'bg-white text-indigo-600 shadow-2xs'
                 : 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200'
             "
-            @click="sidebarTab = 'history'"
+            @click="
+              () => {
+                clearSidebarHover()
+                sidebarTab = 'history'
+              }
+            "
           >
             <span>对话历史 ({{ sessions.length }})</span>
             <IconRenderer
@@ -1019,7 +1038,7 @@ onUnmounted(() => {
       </div>
 
       <!-- List Content -->
-      <div class="flex-1 overflow-y-auto p-2 space-y-1">
+      <div class="flex-1 overflow-y-auto p-2 space-y-1" @scroll="clearSidebarHover">
         <!-- Tab 1: Built-in & Custom AI Prompt Roles -->
         <template v-if="sidebarTab === 'roles'">
           <div
@@ -1035,10 +1054,17 @@ onUnmounted(() => {
                   ? 'bg-transparent border-transparent hover:bg-slate-900/70 text-slate-300'
                   : 'bg-transparent border-transparent hover:bg-white/70 text-slate-700'
             "
-            @click="selectRole(role.id)"
+            @mouseenter="onRoleMouseEnter(role, $event)"
+            @mouseleave="clearSidebarHover"
+            @click="
+              () => {
+                clearSidebarHover()
+                selectRole(role.id)
+              }
+            "
           >
             <div class="flex items-center justify-between gap-1.5">
-              <div class="flex items-center gap-2 min-w-0">
+              <div class="flex items-center gap-1.5 min-w-0">
                 <IconRenderer
                   :name="isRoleGenerating(role.id) ? 'RefreshCw' : role.icon"
                   :size="14"
@@ -1083,7 +1109,10 @@ onUnmounted(() => {
                 </button>
               </div>
             </div>
-            <div class="text-[10.5px] text-slate-400 mt-1 line-clamp-1">
+            <div
+              class="text-[11px] leading-snug mt-1 line-clamp-2"
+              :class="store.isDark ? 'text-slate-400' : 'text-slate-500'"
+            >
               {{ role.desc }}
             </div>
           </div>
@@ -1104,7 +1133,14 @@ onUnmounted(() => {
                   ? 'bg-transparent border-transparent hover:bg-slate-900/70 text-slate-300'
                   : 'bg-transparent border-transparent hover:bg-white/70 text-slate-700'
             "
-            @click="selectSession(sess)"
+            @mouseenter="onSessionMouseEnter(sess, $event)"
+            @mouseleave="clearSidebarHover"
+            @click="
+              () => {
+                clearSidebarHover()
+                selectSession(sess)
+              }
+            "
           >
             <div class="min-w-0 flex-1">
               <div class="text-xs font-semibold truncate flex items-center gap-1.5">
@@ -1116,9 +1152,9 @@ onUnmounted(() => {
                 />
                 <span class="truncate">{{ sess.title }}</span>
               </div>
-              <div class="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1.5">
+              <div class="text-[10.5px] text-slate-400 mt-0.5 flex items-center gap-1.5">
                 <span v-if="generatingSessionMap[sess.id]" class="text-indigo-400 font-medium">正在生成回答...</span>
-                <span v-else>{{ sess.turns.length }} 条消息</span>
+                <span v-else>{{ sess.turns.length }} 条消息 · {{ resolveRoleName(sess.roleId) }}</span>
                 <span>·</span>
                 <span>{{ new Date(sess.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }}</span>
               </div>
@@ -1168,6 +1204,123 @@ onUnmounted(() => {
           <span>+ 新增自定义 Prompt 角色</span>
         </button>
       </div>
+
+      <!-- Smart Floating Hover Preview Card for Truncated Roles & Sessions -->
+      <Transition
+        enter-active-class="transition duration-150 ease-out"
+        enter-from-class="opacity-0 -translate-x-1 scale-95"
+        enter-to-class="opacity-100 translate-x-0 scale-100"
+        leave-active-class="transition duration-100 ease-in"
+        leave-from-class="opacity-100 translate-x-0 scale-100"
+        leave-to-class="opacity-0 -translate-x-1 scale-95"
+      >
+        <div
+          v-if="hoveredRole || hoveredSession"
+          class="fixed z-[110] w-[310px] p-3.5 rounded-2xl border shadow-2xl backdrop-blur-xl pointer-events-none select-none space-y-2.5"
+          :style="{ top: `${hoverPopoverTop}px`, left: `${hoverPopoverLeft}px` }"
+          :class="
+            store.isDark
+              ? 'bg-[#0F172A]/95 border-indigo-500/35 text-slate-100 shadow-black/60'
+              : 'bg-white/95 border-indigo-200/90 text-slate-800 shadow-slate-900/15'
+          "
+        >
+          <!-- Case A: Role Details Hover Preview -->
+          <template v-if="hoveredRole">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <span
+                  class="inline-flex items-center justify-center w-6 h-6 rounded-lg bg-indigo-500/15 text-indigo-400 shrink-0"
+                >
+                  <IconRenderer :name="hoveredRole.icon" :size="14" />
+                </span>
+                <span class="text-[13px] font-bold leading-snug">{{ hoveredRole.name }}</span>
+              </div>
+              <span
+                class="px-2 py-0.5 rounded-md text-[10px] font-semibold shrink-0"
+                :class="
+                  store.isDark
+                    ? 'bg-indigo-500/20 text-indigo-300'
+                    : 'bg-indigo-50 text-indigo-600'
+                "
+              >
+                {{ hoveredRole.badge }}
+              </span>
+            </div>
+
+            <p class="text-[11.5px] leading-relaxed" :class="store.isDark ? 'text-slate-300' : 'text-slate-600'">
+              {{ hoveredRole.desc }}
+            </p>
+
+            <div
+              class="p-2 rounded-xl border text-[10.5px] leading-relaxed"
+              :class="
+                store.isDark
+                  ? 'bg-slate-950/80 border-slate-800 text-slate-400'
+                  : 'bg-slate-50 border-slate-200/80 text-slate-500'
+              "
+            >
+              <div class="font-semibold text-indigo-400 mb-0.5">内置系统设定 (System Prompt)：</div>
+              <div class="line-clamp-3">{{ hoveredRole.systemPrompt }}</div>
+            </div>
+          </template>
+
+          <!-- Case B: Session History Hover Preview -->
+          <template v-else-if="hoveredSession">
+            <div class="space-y-1">
+              <div class="flex items-start justify-between gap-2">
+                <span class="text-[12.5px] font-bold leading-snug break-words">
+                  {{ hoveredSession.title }}
+                </span>
+                <span
+                  class="px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0"
+                  :class="
+                    store.isDark
+                      ? 'bg-indigo-500/20 text-indigo-300'
+                      : 'bg-indigo-50 text-indigo-600'
+                  "
+                >
+                  {{ resolveRoleName(hoveredSession.roleId) }}
+                </span>
+              </div>
+              <div class="text-[10.5px] text-slate-400 flex items-center gap-2">
+                <span>共 {{ hoveredSession.turns.length }} 条消息</span>
+                <span>·</span>
+                <span>更新于 {{ new Date(hoveredSession.updatedAt).toLocaleString('zh-CN', { hour12: false }) }}</span>
+              </div>
+            </div>
+
+            <div
+              v-if="hoveredSession.turns.length > 0"
+              class="p-2.5 rounded-xl border space-y-1.5 text-[11px] leading-relaxed"
+              :class="
+                store.isDark
+                  ? 'bg-slate-950/80 border-slate-800 text-slate-300'
+                  : 'bg-slate-50 border-slate-200/80 text-slate-600'
+              "
+            >
+              <div
+                v-for="t in hoveredSession.turns.slice(-2)"
+                :key="t.id"
+                class="line-clamp-2"
+              >
+                <strong
+                  :class="
+                    t.role === 'user'
+                      ? 'text-indigo-400 mr-1'
+                      : 'text-emerald-500 mr-1'
+                  "
+                >
+                  {{ t.role === 'user' ? '问:' : '答:' }}
+                </strong>
+                <span>{{ t.content.replace(/\s+/g, ' ').slice(0, 110) }}</span>
+              </div>
+            </div>
+            <div v-else class="text-[11px] text-slate-400 italic">
+              当前为空白新对话，点击即可开始提问
+            </div>
+          </template>
+        </div>
+      </Transition>
     </aside>
 
     <!-- ========================================================================= -->
@@ -1418,70 +1571,18 @@ onUnmounted(() => {
                 </div>
               </div>
 
-              <!-- Structured Content Blocks (Text + Fenced Code Blocks) -->
-              <div class="space-y-2.5 text-xs leading-relaxed">
-                <template
-                  v-for="(block, bIdx) in parseMessageBlocks(turn.content)"
-                  :key="bIdx"
-                >
-                  <div
-                    v-if="block.type === 'text'"
-                    class="whitespace-pre-wrap break-words"
-                  >
-                    {{ block.content }}
-                  </div>
-
-                  <div
-                    v-else
-                    class="rounded-xl border overflow-hidden"
-                    :class="
-                      store.isDark
-                        ? 'bg-[#090D16] border-slate-800'
-                        : 'bg-slate-900 border-slate-800 text-slate-100'
-                    "
-                  >
-                    <div
-                      class="px-3 py-1.5 bg-slate-950/80 border-b border-slate-800 flex items-center justify-between text-[11px] text-slate-400 select-none"
-                    >
-                      <span class="font-mono font-bold uppercase text-indigo-400">
-                        {{ block.lang || 'CODE' }}
-                      </span>
-                      <div class="flex items-center gap-2">
-                        <button
-                          v-if="block.lang === 'json'"
-                          type="button"
-                          class="hover:text-indigo-300 cursor-pointer"
-                          @click="sendCodeToPlugin(block.content, 'json-studio')"
-                        >
-                          送入 JSON 助手
-                        </button>
-                        <button
-                          type="button"
-                          class="flex items-center gap-1 text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer"
-                          @click="
-                            copyText(
-                              block.content,
-                              `${block.lang || '代码'}片段`,
-                              `code-${turn.id}-${bIdx}`
-                            )
-                          "
-                        >
-                          <IconRenderer
-                            :name="copiedKey === `code-${turn.id}-${bIdx}` ? 'Check' : 'Copy'"
-                            :size="11"
-                          />
-                          <span>
-                            {{ copiedKey === `code-${turn.id}-${bIdx}` ? '已复制' : '复制代码' }}
-                          </span>
-                        </button>
-                      </div>
-                    </div>
-                    <pre
-                      class="p-3 font-mono text-[11.5px] leading-relaxed overflow-x-auto text-slate-100"
-                    ><code>{{ block.content }}</code></pre>
-                  </div>
-                </template>
-              </div>
+              <!-- Rich GFM Markdown + Adaptive Syntax-Highlighted Code Blocks -->
+              <AiMarkdownRenderer
+                :content="turn.content"
+                :is-dark="store.isDark"
+                @copy-code="
+                  ({ code, lang }) =>
+                    copyText(code, `${lang || '代码'}片段`, `code-${turn.id}`)
+                "
+                @send-to-plugin="
+                  ({ code, target }) => sendCodeToPlugin(code, target)
+                "
+              />
 
               <!-- Turn Footer Meta & Actions -->
               <div
@@ -1549,9 +1650,18 @@ onUnmounted(() => {
                 </div>
                 {{ currentStreamingDraft.reasoningContent }}
               </div>
-              <div class="text-xs leading-relaxed whitespace-pre-wrap break-words">
-                {{ currentStreamingDraft.content }}<span class="inline-block w-1.5 h-3.5 ml-0.5 align-middle bg-indigo-400 animate-pulse"></span>
-              </div>
+              <AiMarkdownRenderer
+                :content="currentStreamingDraft.content"
+                :is-dark="store.isDark"
+                :streaming="true"
+                @copy-code="
+                  ({ code, lang }) =>
+                    copyText(code, `${lang || '代码'}片段`, 'stream-code')
+                "
+                @send-to-plugin="
+                  ({ code, target }) => sendCodeToPlugin(code, target)
+                "
+              />
               <div class="pt-1 flex items-center gap-1.5 text-[10.5px] text-indigo-400 font-mono">
                 <IconRenderer name="RefreshCw" :size="11" class-name="animate-spin" />
                 <span>{{ currentStreamingDraft.model || store.userSettings.aiModelName }} 正在实时流式输出...</span>

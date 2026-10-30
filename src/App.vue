@@ -7,6 +7,7 @@ import SearchBar from '@/components/SearchBar.vue'
 import HomeGridDeck from '@/components/HomeGridDeck.vue'
 import ResultList from '@/components/ResultList.vue'
 import IconRenderer from '@/components/IconRenderer.vue'
+import AiMarkdownRenderer from '@/components/AiMarkdownRenderer.vue'
 
 // Built-in Fast Micro-App Plugins
 import CalcPad from '@/plugins/calc-pad/CalcPad.vue'
@@ -772,7 +773,7 @@ onUnmounted(() => {
             </details>
 
             <div
-              class="p-3.5 rounded-xl border text-xs leading-relaxed whitespace-pre-wrap select-text"
+              class="p-3.5 rounded-xl border text-xs leading-relaxed select-text"
               :class="
                 store.aiAnswerState.error
                   ? store.isDark
@@ -780,14 +781,26 @@ onUnmounted(() => {
                     : 'bg-rose-50 border-rose-200 text-rose-800'
                   : store.isDark
                     ? 'bg-slate-900/90 border-slate-800 text-slate-200'
-                    : 'bg-white border-slate-200 text-slate-800'
+                    : 'bg-white border-slate-200 text-slate-800 shadow-xs'
               "
             >
               <div v-if="store.aiAnswerState.loading" class="flex items-center gap-2 text-slate-400 py-4">
                 <IconRenderer name="RefreshCw" :size="14" class-name="animate-spin text-indigo-400" />
                 <span>正在通过原生通道请求 {{ store.userSettings.aiModelName }} 思考回答中...</span>
               </div>
-              <div v-else>{{ store.aiAnswerState.answer }}</div>
+              <AiMarkdownRenderer
+                v-else
+                :content="store.aiAnswerState.answer"
+                :is-dark="store.isDark"
+                @copy-code="({ code }) => copyTextWithToast(code, '代码片段已复制')"
+                @send-to-plugin="
+                  ({ code, target }) => {
+                    store.pluginInitialPayload = code
+                    store.aiAnswerState = null
+                    store.openPlugin(target)
+                  }
+                "
+              />
             </div>
           </div>
 
