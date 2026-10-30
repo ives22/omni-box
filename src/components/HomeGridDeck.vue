@@ -28,6 +28,7 @@ function shortLabel(title: string): string {
     .replace(/\s*\([^)]*\)/g, '')
     .replace('uTools 插件中心与沙箱挂载', '插件市场')
     .replace('插件应用市场', '插件市场')
+    .replace('AI 助手与指令工作台', 'AI 助手')
     .replace('2FA 验证码管理', '2FA 令牌')
     .replace('IP 与网络工作台', 'IP 工作台')
     .replace('换算与格式工作台', '单位换算')

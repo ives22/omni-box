@@ -86,6 +86,26 @@ export interface ExternalUtoolsPlugin {
   customHtml?: string
 }
 
+export interface AiProviderProfile {
+  baseUrl: string
+  apiKey: string
+  modelName: string
+  availableModels?: string[]
+}
+
+export interface AiChatMessageInput {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+}
+
+export interface AiChatCompletionResponse {
+  content: string
+  reasoningContent?: string | null
+  model: string
+  latencyMs: number
+  totalTokens?: number | null
+}
+
 export interface UserSettings {
   nickname: string
   roleTitle: string
@@ -130,6 +150,42 @@ export interface UserSettings {
   aiApiKey?: string
   aiModelName?: string
   aiQuickAskEnabled?: boolean
+  aiTemperature?: number
+  aiSystemPrompt?: string
+  aiProviderProfiles?: Record<string, AiProviderProfile>
+}
+
+export const DEFAULT_AI_PROVIDER_PROFILES: Record<string, AiProviderProfile> = {
+  'OpenAI': {
+    baseUrl: 'https://api.openai.com/v1',
+    apiKey: '',
+    modelName: 'gpt-4o',
+    availableModels: ['gpt-4o', 'gpt-4o-mini', 'o3-mini']
+  },
+  'Google Gemini': {
+    baseUrl: 'https://generativelanguage.googleapis.com',
+    apiKey: '',
+    modelName: 'gemini-2.5-pro',
+    availableModels: ['gemini-2.5-pro', 'gemini-2.5-flash']
+  },
+  'DeepSeek': {
+    baseUrl: 'https://api.deepseek.com/v1',
+    apiKey: '',
+    modelName: 'deepseek-chat',
+    availableModels: ['deepseek-chat', 'deepseek-reasoner']
+  },
+  'Anthropic Claude': {
+    baseUrl: 'https://api.anthropic.com',
+    apiKey: '',
+    modelName: 'claude-3-7-sonnet-latest',
+    availableModels: ['claude-3-7-sonnet-latest', 'claude-3-5-haiku-latest']
+  },
+  'Ollama 本地模型': {
+    baseUrl: 'http://127.0.0.1:11434/v1',
+    apiKey: '',
+    modelName: 'qwen2.5-coder:7b',
+    availableModels: ['qwen2.5-coder:7b', 'deepseek-r1:8b', 'llama3.2:latest']
+  }
 }
 
 export const DEFAULT_USER_SETTINGS: UserSettings = {
@@ -148,6 +204,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
     jj: 'plugin:json-studio',
     dd: 'plugin:diff-viewer',
     vv: 'plugin:password-vault',
+    aa: 'plugin:ai-studio',
     ss: 'plugin:user-center'
   },
   disabledAppIds: [],
@@ -180,7 +237,10 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   aiBaseUrl: 'https://generativelanguage.googleapis.com',
   aiApiKey: '',
   aiModelName: 'gemini-2.5-pro',
-  aiQuickAskEnabled: true
+  aiQuickAskEnabled: true,
+  aiTemperature: 0.7,
+  aiSystemPrompt: '你是 OmniBox 桌面极客工作台的内置 AI 助手，回答应简洁、准确、结构清晰，涉及代码时直接给出高质量可运行示例。',
+  aiProviderProfiles: { ...DEFAULT_AI_PROVIDER_PROFILES }
 }
 
 export const isTauriEnv = (): boolean => {
@@ -294,6 +354,32 @@ export const CORE_PLUGIN_ITEMS: Omit<SearchResultItem, 'score' | 'match_type'>[]
     ],
     action_payload: 'unit-converter',
     badge: '内置极速'
+  },
+  {
+    id: 'plugin:ai-studio',
+    title: 'AI 助手与指令工作台 (AI Studio)',
+    subtitle: '支持多模型多轮对话、代码解释排障、沉浸式中英互译、Shell/SQL/正则生成与自定义 Prompt 角色',
+    category: 'plugin',
+    icon: 'Sparkles',
+    keywords: [
+      'ai',
+      'chat',
+      'gpt',
+      'gemini',
+      'claude',
+      'deepseek',
+      'translate',
+      'prompt',
+      '助手',
+      '对话',
+      '问答',
+      '翻译',
+      '润色',
+      '解释代码',
+      'aizs'
+    ],
+    action_payload: 'ai-studio',
+    badge: '智能引擎'
   },
   {
     id: 'plugin:utools-hub',
@@ -1328,4 +1414,87 @@ export async function fetchPublicIpGeo(
   base.sourceName = 'GeoJS + 多源聚合校准'
   base.latencyMs = Math.round(performance.now() - t0)
   return base
+}
+
+export async function requestAiChatCompletion(params: {
+  provider: string
+  baseUrl: string
+  apiKey: string
+  model: string
+  messages: AiChatMessageInput[]
+  temperature?: number
+  proxyUrl?: string
+}): Promise<AiChatCompletionResponse> {
+  if (isTauriEnv()) {
+    return await invoke<AiChatCompletionResponse>('ai_chat_completion', {
+      provider: params.provider,
+      baseUrl: params.baseUrl,
+      apiKey: params.apiKey,
+      model: params.model,
+      messages: params.messages,
+      temperature: params.temperature ?? 0.7,
+      proxyUrl: params.proxyUrl || null
+    })
+  }
+
+  // Browser preview fallback
+  const t0 = performance.now()
+  const host = (params.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '')
+  const url = host.endsWith('/chat/completions')
+    ? host
+    : host.endsWith('/v1')
+      ? `${host}/chat/completions`
+      : `${host}/v1/chat/completions`
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (params.apiKey) headers['Authorization'] = `Bearer ${params.apiKey}`
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model: params.model,
+      messages: params.messages,
+      temperature: params.temperature ?? 0.7
+    })
+  })
+  const data = await res.json()
+  if (data?.error) {
+    throw new Error(data.error.message || String(data.error))
+  }
+  return {
+    content: data?.choices?.[0]?.message?.content || '未获取到有效响应',
+    reasoningContent: data?.choices?.[0]?.message?.reasoning_content || null,
+    model: data?.model || params.model,
+    latencyMs: Math.round(performance.now() - t0),
+    totalTokens: data?.usage?.total_tokens || null
+  }
+}
+
+export async function fetchAiProviderModels(params: {
+  provider: string
+  baseUrl: string
+  apiKey: string
+  proxyUrl?: string
+}): Promise<string[]> {
+  if (isTauriEnv()) {
+    return await invoke<string[]>('ai_fetch_models', {
+      provider: params.provider,
+      baseUrl: params.baseUrl,
+      apiKey: params.apiKey,
+      proxyUrl: params.proxyUrl || null
+    })
+  }
+  const host = (params.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '')
+  const url = host.endsWith('/models')
+    ? host
+    : host.endsWith('/v1')
+      ? `${host}/models`
+      : `${host}/v1/models`
+  const headers: Record<string, string> = { Accept: 'application/json' }
+  if (params.apiKey) headers['Authorization'] = `Bearer ${params.apiKey}`
+  const res = await fetch(url, { headers })
+  const data = await res.json()
+  if (Array.isArray(data?.data)) {
+    return data.data.map((m: { id: string }) => m.id).filter(Boolean)
+  }
+  return []
 }

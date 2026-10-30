@@ -909,6 +909,34 @@ fn build_core_items(sys_apps: &[SearchableItem]) -> Vec<SearchableItem> {
             "unit-converter",
         ),
         SearchableItem::new(
+            "plugin:ai-studio",
+            "AI 助手与指令工作台 (AI Studio)",
+            "支持多模型多轮对话、代码解释排障、沉浸式中英互译、Shell/SQL/正则生成与自定义 Prompt 角色",
+            "plugin",
+            "Sparkles",
+            None,
+            vec![
+                "ai",
+                "chat",
+                "gpt",
+                "gemini",
+                "claude",
+                "deepseek",
+                "translate",
+                "prompt",
+                "助手",
+                "对话",
+                "问答",
+                "翻译",
+                "润色",
+                "解释代码",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+            "ai-studio",
+        ),
+        SearchableItem::new(
             "plugin:utools-hub",
             "uTools 插件中心与沙箱挂载",
             "突破 10 个应用限制，无限挂载本地与开源 uTools 生态插件 (plugin.json)",
@@ -2639,6 +2667,517 @@ fn get_system_integration_status() -> Result<SystemIntegrationStatus, String> {
     })
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiChatMessageInput {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiChatCompletionResponse {
+    pub content: String,
+    pub reasoning_content: Option<String>,
+    pub model: String,
+    pub latency_ms: u64,
+    pub total_tokens: Option<u64>,
+}
+
+fn normalize_openai_endpoint(raw_base: &str, default_host: &str, suffix_path: &str) -> String {
+    let base = if raw_base.trim().is_empty() {
+        default_host.trim_end_matches('/').to_string()
+    } else {
+        raw_base.trim().trim_end_matches('/').to_string()
+    };
+
+    if suffix_path == "/chat/completions" {
+        if base.ends_with("/chat/completions") {
+            return base;
+        }
+        if base.ends_with("/v1") || base.ends_with("/v1beta/openai") {
+            return format!("{}/chat/completions", base);
+        }
+        return format!("{}/v1/chat/completions", base);
+    }
+
+    if suffix_path == "/models" {
+        if base.ends_with("/models") {
+            return base;
+        }
+        if base.ends_with("/chat/completions") {
+            return format!(
+                "{}/models",
+                base.trim_end_matches("/chat/completions")
+            );
+        }
+        if base.ends_with("/v1") || base.ends_with("/v1beta/openai") {
+            return format!("{}/models", base);
+        }
+        return format!("{}/v1/models", base);
+    }
+
+    format!("{}{}", base, suffix_path)
+}
+
+fn parse_ai_response_body(raw_body: &str, fallback_model: &str) -> Result<(String, Option<String>, String, Option<u64>), String> {
+    let trimmed = raw_body.trim();
+    if trimmed.is_empty() {
+        return Err("AI 接口返回内容为空，请检查 API Endpoint 与密钥是否正确".to_string());
+    }
+
+    // Case 1: Server returned SSE stream (`data: {...}`) even when `stream: false` was requested
+    if trimmed.starts_with("data:") || trimmed.contains("\ndata:") {
+        let mut combined_content = String::new();
+        let mut combined_reasoning = String::new();
+        let mut detected_model = fallback_model.to_string();
+
+        for line in trimmed.lines() {
+            let l = line.trim();
+            if let Some(rest) = l.strip_prefix("data:") {
+                let data_str = rest.trim();
+                if data_str == "[DONE]" || data_str.is_empty() {
+                    continue;
+                }
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(data_str) {
+                    if let Some(err_msg) = val["error"]["message"].as_str() {
+                        return Err(format!("AI 接口错误: {}", err_msg));
+                    }
+                    if let Some(m) = val["model"].as_str() {
+                        if !m.is_empty() {
+                            detected_model = m.to_string();
+                        }
+                    }
+                    if let Some(choices) = val["choices"].as_array() {
+                        if let Some(first) = choices.first() {
+                            if let Some(c) = first["delta"]["content"]
+                                .as_str()
+                                .or_else(|| first["message"]["content"].as_str())
+                            {
+                                combined_content.push_str(c);
+                            }
+                            if let Some(r) = first["delta"]["reasoning_content"]
+                                .as_str()
+                                .or_else(|| first["message"]["reasoning_content"].as_str())
+                            {
+                                combined_reasoning.push_str(r);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !combined_content.is_empty() || !combined_reasoning.is_empty() {
+            let r_opt = if combined_reasoning.trim().is_empty() {
+                None
+            } else {
+                Some(combined_reasoning)
+            };
+            return Ok((combined_content, r_opt, detected_model, None));
+        }
+    }
+
+    // Case 2: Standard JSON response (OpenAI / Gemini / Anthropic Claude / Ollama)
+    let json_val: serde_json::Value = serde_json::from_str(trimmed).map_err(|_| {
+        let preview: String = trimmed.chars().take(240).collect();
+        format!("AI 接口返回非标准 JSON 响应: {}", preview)
+    })?;
+
+    if let Some(err_obj) = json_val.get("error") {
+        let msg = err_obj["message"]
+            .as_str()
+            .or_else(|| err_obj.as_str())
+            .unwrap_or("未知接口错误");
+        return Err(format!("AI 接口报错: {}", msg));
+    }
+
+    let detected_model = json_val["model"]
+        .as_str()
+        .or_else(|| json_val["modelVersion"].as_str())
+        .unwrap_or(fallback_model)
+        .to_string();
+
+    let total_tokens = json_val["usage"]["total_tokens"]
+        .as_u64()
+        .or_else(|| json_val["usageMetadata"]["totalTokenCount"].as_u64());
+
+    // 2a. OpenAI / DeepSeek / Sub2API / OneAPI format (`choices[0].message.content`)
+    if let Some(choices) = json_val["choices"].as_array() {
+        if let Some(first) = choices.first() {
+            let content = first["message"]["content"]
+                .as_str()
+                .or_else(|| first["text"].as_str())
+                .unwrap_or("")
+                .to_string();
+            let reasoning = first["message"]["reasoning_content"]
+                .as_str()
+                .or_else(|| first["message"]["reasoning"].as_str())
+                .map(|s| s.to_string())
+                .filter(|s| !s.trim().is_empty());
+            if !content.is_empty() || reasoning.is_some() {
+                return Ok((content, reasoning, detected_model, total_tokens));
+            }
+        }
+    }
+
+    // 2b. Google Gemini native format (`candidates[0].content.parts`)
+    if let Some(candidates) = json_val["candidates"].as_array() {
+        if let Some(first) = candidates.first() {
+            if let Some(parts) = first["content"]["parts"].as_array() {
+                let mut text_buf = String::new();
+                for p in parts {
+                    if let Some(t) = p["text"].as_str() {
+                        text_buf.push_str(t);
+                    }
+                }
+                if !text_buf.is_empty() {
+                    return Ok((text_buf, None, detected_model, total_tokens));
+                }
+            }
+        }
+    }
+
+    // 2c. Anthropic Claude native format (`content[0].text`)
+    if let Some(content_arr) = json_val["content"].as_array() {
+        let mut text_buf = String::new();
+        let mut thinking_buf = String::new();
+        for item in content_arr {
+            if item["type"].as_str() == Some("thinking") {
+                if let Some(t) = item["thinking"].as_str() {
+                    thinking_buf.push_str(t);
+                }
+            } else if let Some(t) = item["text"].as_str() {
+                text_buf.push_str(t);
+            }
+        }
+        if !text_buf.is_empty() || !thinking_buf.is_empty() {
+            let r_opt = if thinking_buf.trim().is_empty() {
+                None
+            } else {
+                Some(thinking_buf)
+            };
+            return Ok((text_buf, r_opt, detected_model, total_tokens));
+        }
+    }
+
+    // 2d. Ollama `/api/chat` fallback (`message.content`)
+    if let Some(c) = json_val["message"]["content"].as_str() {
+        return Ok((c.to_string(), None, detected_model, total_tokens));
+    }
+
+    Err(format!(
+        "未能从响应中解析出有效内容: {}",
+        trimmed.chars().take(200).collect::<String>()
+    ))
+}
+
+#[tauri::command]
+async fn ai_chat_completion(
+    provider: String,
+    base_url: String,
+    api_key: String,
+    model: String,
+    messages: Vec<AiChatMessageInput>,
+    temperature: Option<f64>,
+    proxy_url: Option<String>,
+) -> Result<AiChatCompletionResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<AiChatCompletionResponse, String> {
+        use std::io::Write;
+        let start = Instant::now();
+        let clean_key = api_key.trim().to_string();
+        let clean_base = base_url.trim().trim_end_matches('/').to_string();
+        let clean_model = if model.trim().is_empty() {
+            "gpt-4o-mini".to_string()
+        } else {
+            model.trim().to_string()
+        };
+        let temp = temperature.unwrap_or(0.7);
+
+        let is_native_gemini = provider == "Google Gemini"
+            && (clean_base.is_empty() || clean_base.contains("googleapis.com"))
+            && !clean_base.ends_with("/v1");
+
+        let is_native_claude = provider == "Anthropic Claude"
+            && (clean_base.is_empty() || clean_base.contains("anthropic.com"))
+            && !clean_base.ends_with("/v1");
+
+        let mut curl_args: Vec<String> = vec![
+            "-s".to_string(),
+            "-S".to_string(),
+            "-L".to_string(),
+            "--max-time".to_string(),
+            "60".to_string(),
+            "-H".to_string(),
+            "Content-Type: application/json".to_string(),
+            "-H".to_string(),
+            "Accept: application/json, text/event-stream".to_string(),
+            "-A".to_string(),
+            "OmniBox-AI-Client/2.0".to_string(),
+        ];
+
+        if let Some(px) = proxy_url {
+            let p_trim = px.trim();
+            if !p_trim.is_empty() {
+                curl_args.push("-x".to_string());
+                curl_args.push(p_trim.to_string());
+            }
+        }
+
+        let (target_url, payload_str) = if is_native_gemini {
+            let host = if clean_base.is_empty() {
+                "https://generativelanguage.googleapis.com"
+            } else {
+                clean_base.as_str()
+            };
+            let url = format!(
+                "{}/v1beta/models/{}:generateContent?key={}",
+                host, clean_model, clean_key
+            );
+            let mut sys_text = String::new();
+            let mut contents = Vec::new();
+            for m in &messages {
+                if m.role == "system" {
+                    if !sys_text.is_empty() {
+                        sys_text.push('\n');
+                    }
+                    sys_text.push_str(&m.content);
+                } else {
+                    let g_role = if m.role == "assistant" { "model" } else { "user" };
+                    contents.push(serde_json::json!({
+                        "role": g_role,
+                        "parts": [{ "text": m.content }]
+                    }));
+                }
+            }
+            let mut body_json = serde_json::json!({
+                "contents": contents,
+                "generationConfig": {
+                    "temperature": temp
+                }
+            });
+            if !sys_text.is_empty() {
+                body_json["systemInstruction"] = serde_json::json!({
+                    "parts": [{ "text": sys_text }]
+                });
+            }
+            (url, body_json.to_string())
+        } else if is_native_claude {
+            let host = if clean_base.is_empty() {
+                "https://api.anthropic.com"
+            } else {
+                clean_base.as_str()
+            };
+            let url = format!("{}/v1/messages", host.trim_end_matches("/v1"));
+            curl_args.push("-H".to_string());
+            curl_args.push(format!("x-api-key: {}", clean_key));
+            curl_args.push("-H".to_string());
+            curl_args.push("anthropic-version: 2023-06-01".to_string());
+
+            let mut sys_text = String::new();
+            let mut claude_msgs = Vec::new();
+            for m in &messages {
+                if m.role == "system" {
+                    if !sys_text.is_empty() {
+                        sys_text.push('\n');
+                    }
+                    sys_text.push_str(&m.content);
+                } else {
+                    claude_msgs.push(serde_json::json!({
+                        "role": if m.role == "assistant" { "assistant" } else { "user" },
+                        "content": m.content
+                    }));
+                }
+            }
+            let mut body_json = serde_json::json!({
+                "model": clean_model,
+                "max_tokens": 4096,
+                "temperature": temp,
+                "messages": claude_msgs
+            });
+            if !sys_text.is_empty() {
+                body_json["system"] = serde_json::Value::String(sys_text);
+            }
+            (url, body_json.to_string())
+        } else {
+            // OpenAI / DeepSeek / Ollama / Sub2API / OneAPI / Any OpenAI-compatible gateway
+            let default_host = match provider.as_str() {
+                "DeepSeek" => "https://api.deepseek.com/v1",
+                "Ollama 本地模型" => "http://127.0.0.1:11434/v1",
+                "Google Gemini" => "https://generativelanguage.googleapis.com/v1beta/openai",
+                _ => "https://api.openai.com/v1",
+            };
+            let url = normalize_openai_endpoint(&clean_base, default_host, "/chat/completions");
+            if !clean_key.is_empty() {
+                curl_args.push("-H".to_string());
+                curl_args.push(format!("Authorization: Bearer {}", clean_key));
+            }
+            let oai_msgs: Vec<serde_json::Value> = messages
+                .iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "role": m.role,
+                        "content": m.content
+                    })
+                })
+                .collect();
+            let body_json = serde_json::json!({
+                "model": clean_model,
+                "messages": oai_msgs,
+                "temperature": temp,
+                "stream": false
+            });
+            (url, body_json.to_string())
+        };
+
+        curl_args.push("--data-binary".to_string());
+        curl_args.push("@-".to_string());
+        curl_args.push(target_url);
+
+        let mut child = Command::new("/usr/bin/curl")
+            .args(&curl_args)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("无法启动网络请求组件: {}", e))?;
+
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = stdin.write_all(payload_str.as_bytes());
+        }
+
+        let out = child
+            .wait_with_output()
+            .map_err(|e| format!("等待 AI 响应失败: {}", e))?;
+
+        if !out.status.success() {
+            let err_str = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(format!("网络连接异常: {}", err_str));
+        }
+
+        let raw_stdout = String::from_utf8_lossy(&out.stdout).to_string();
+        let (content, reasoning_content, used_model, total_tokens) =
+            parse_ai_response_body(&raw_stdout, &clean_model)?;
+
+        let latency_ms = start.elapsed().as_millis() as u64;
+        Ok(AiChatCompletionResponse {
+            content,
+            reasoning_content,
+            model: used_model,
+            latency_ms,
+            total_tokens,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn ai_fetch_models(
+    provider: String,
+    base_url: String,
+    api_key: String,
+    proxy_url: Option<String>,
+) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<String>, String> {
+        let clean_key = api_key.trim().to_string();
+        let clean_base = base_url.trim().trim_end_matches('/').to_string();
+
+        let is_native_gemini = provider == "Google Gemini"
+            && (clean_base.is_empty() || clean_base.contains("googleapis.com"))
+            && !clean_base.ends_with("/v1");
+
+        let mut curl_args: Vec<String> = vec![
+            "-s".to_string(),
+            "-S".to_string(),
+            "-L".to_string(),
+            "--max-time".to_string(),
+            "15".to_string(),
+            "-H".to_string(),
+            "Accept: application/json".to_string(),
+            "-A".to_string(),
+            "OmniBox-AI-Client/2.0".to_string(),
+        ];
+
+        if let Some(px) = proxy_url {
+            let p_trim = px.trim();
+            if !p_trim.is_empty() {
+                curl_args.push("-x".to_string());
+                curl_args.push(p_trim.to_string());
+            }
+        }
+
+        let target_url = if is_native_gemini {
+            let host = if clean_base.is_empty() {
+                "https://generativelanguage.googleapis.com"
+            } else {
+                clean_base.as_str()
+            };
+            format!("{}/v1beta/models?key={}", host, clean_key)
+        } else {
+            let default_host = match provider.as_str() {
+                "DeepSeek" => "https://api.deepseek.com/v1",
+                "Ollama 本地模型" => "http://127.0.0.1:11434/v1",
+                "Anthropic Claude" => "https://api.anthropic.com/v1",
+                _ => "https://api.openai.com/v1",
+            };
+            if !clean_key.is_empty() {
+                curl_args.push("-H".to_string());
+                curl_args.push(format!("Authorization: Bearer {}", clean_key));
+                if provider == "Anthropic Claude" && clean_base.contains("anthropic.com") {
+                    curl_args.push("-H".to_string());
+                    curl_args.push(format!("x-api-key: {}", clean_key));
+                    curl_args.push("-H".to_string());
+                    curl_args.push("anthropic-version: 2023-06-01".to_string());
+                }
+            }
+            normalize_openai_endpoint(&clean_base, default_host, "/models")
+        };
+
+        curl_args.push(target_url);
+
+        let out = Command::new("/usr/bin/curl")
+            .args(&curl_args)
+            .output()
+            .map_err(|e| format!("请求模型列表失败: {}", e))?;
+
+        if !out.status.success() {
+            let err_str = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            return Err(format!("无法连接至 Endpoint: {}", err_str));
+        }
+
+        let body = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let json_val: serde_json::Value =
+            serde_json::from_str(&body).map_err(|_| "返回格式非标准 JSON".to_string())?;
+
+        if let Some(err_msg) = json_val["error"]["message"].as_str() {
+            return Err(format!("服务端返回错误: {}", err_msg));
+        }
+
+        let mut models: Vec<String> = Vec::new();
+        if let Some(data_arr) = json_val["data"].as_array() {
+            for item in data_arr {
+                if let Some(id) = item["id"].as_str() {
+                    models.push(id.to_string());
+                }
+            }
+        } else if let Some(models_arr) = json_val["models"].as_array() {
+            for item in models_arr {
+                if let Some(name) = item["name"].as_str().or_else(|| item["id"].as_str()) {
+                    models.push(name.trim_start_matches("models/").to_string());
+                }
+            }
+        }
+
+        if models.is_empty() {
+            return Err("接口已连通，但未返回可用模型列表".to_string());
+        }
+        Ok(models)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 fn summon_and_open_plugin_in_main(app_handle: &AppHandle, plugin_id: &str) {
     if let Some(win) = app_handle.get_webview_window("main") {
         let _ = win.unminimize();
@@ -2712,6 +3251,10 @@ fn setup_system_tray(
     // Submenu 1: Open Built-in Workbenches in Main Window
     let sub_workbenches = SubmenuBuilder::new(app, "⚡ 快捷打开内置工作台")
         .item(
+            &MenuItemBuilder::with_id("open_plugin:ai-studio", "🤖 AI 助手与指令工作台 (AI Studio)")
+                .build(app)?,
+        )
+        .item(
             &MenuItemBuilder::with_id("open_plugin:calc-pad", "🧮 计算稿纸 (Calc Pad)").build(app)?,
         )
         .item(
@@ -2752,6 +3295,10 @@ fn setup_system_tray(
 
     // Submenu 2: Spawn Independent Detached Windows
     let sub_detached = SubmenuBuilder::new(app, "🪟 以独立窗口打开工具")
+        .item(
+            &MenuItemBuilder::with_id("detach_plugin:ai-studio", "🤖 独立窗口：AI 助手与指令工作台")
+                .build(app)?,
+        )
         .item(
             &MenuItemBuilder::with_id("detach_plugin:calc-pad", "🧮 独立窗口：计算稿纸")
                 .build(app)?,
@@ -2986,6 +3533,7 @@ fn setup_system_tray(
                 other if other.starts_with("detach_plugin:") => {
                     let plugin_id = other.trim_start_matches("detach_plugin:").to_string();
                     let title = match plugin_id.as_str() {
+                        "ai-studio" => "AI 助手与指令工作台 (AI Studio)",
                         "calc-pad" => "计算稿纸 (Calc Pad)",
                         "ip-studio" => "IP 与网络工作台 (IP Studio)",
                         "unit-converter" => "换算与格式工作台 (Unit & Format)",
@@ -3169,7 +3717,9 @@ fn main() {
             read_clipboard_image_base64,
             get_local_network_overview,
             fetch_url_json_via_curl,
-            get_system_integration_status
+            get_system_integration_status,
+            ai_chat_completion,
+            ai_fetch_models
         ])
         .build(tauri::generate_context!())
         .expect("error while building OmniBox Tauri application");

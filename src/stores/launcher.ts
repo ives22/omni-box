@@ -8,6 +8,9 @@ import {
   ExternalUtoolsPlugin,
   UserSettings,
   DEFAULT_USER_SETTINGS,
+  DEFAULT_AI_PROVIDER_PROFILES,
+  requestAiChatCompletion,
+  fetchAiProviderModels,
   queryLauncherItems,
   fetchSystemApps,
   triggerRescanSystemApps,
@@ -110,7 +113,16 @@ export const useLauncherStore = defineStore('launcher', () => {
   const isSuperPanelOpen = ref(false)
   const superPanelClipboard = ref<string>('')
   const superPanelTranslation = ref<string | null>(null)
-  const aiAnswerState = ref<{ question: string; answer: string; loading: boolean } | null>(null)
+  const aiAnswerState = ref<{
+    question: string
+    answer: string
+    reasoningContent?: string | null
+    model?: string
+    latencyMs?: number
+    totalTokens?: number | null
+    error?: boolean
+    loading: boolean
+  } | null>(null)
 
   const toastMessage = ref<string | null>(null)
   const toastType = ref<'success' | 'info' | 'warning'>('success')
@@ -198,10 +210,53 @@ export const useLauncherStore = defineStore('launcher', () => {
     }).catch(() => {})
   }
 
+  function syncCurrentAiFieldsToProfile() {
+    const s = userSettings.value
+    const curProvider = s.aiProvider || 'OpenAI'
+    const profiles =
+      s.aiProviderProfiles ||
+      (JSON.parse(JSON.stringify(DEFAULT_AI_PROVIDER_PROFILES)) as Record<
+        string,
+        typeof DEFAULT_AI_PROVIDER_PROFILES['OpenAI']
+      >)
+    const existing = profiles[curProvider] || {
+      baseUrl: DEFAULT_AI_PROVIDER_PROFILES[curProvider]?.baseUrl || 'https://api.openai.com/v1',
+      apiKey: '',
+      modelName: DEFAULT_AI_PROVIDER_PROFILES[curProvider]?.modelName || 'gpt-4o',
+      availableModels: DEFAULT_AI_PROVIDER_PROFILES[curProvider]?.availableModels || []
+    }
+    profiles[curProvider] = {
+      ...existing,
+      baseUrl: s.aiBaseUrl ?? existing.baseUrl,
+      apiKey: s.aiApiKey ?? existing.apiKey,
+      modelName: s.aiModelName ?? existing.modelName
+    }
+    s.aiProviderProfiles = profiles
+  }
+
+  async function switchAiProvider(nextProvider: string) {
+    // 1. Save current active fields into old provider's profile first
+    syncCurrentAiFieldsToProfile()
+    // 2. Load next provider's saved profile (or default)
+    const profiles = userSettings.value.aiProviderProfiles || { ...DEFAULT_AI_PROVIDER_PROFILES }
+    const target = profiles[nextProvider] || DEFAULT_AI_PROVIDER_PROFILES[nextProvider] || {
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: '',
+      modelName: 'gpt-4o',
+      availableModels: []
+    }
+    userSettings.value.aiProvider = nextProvider
+    userSettings.value.aiBaseUrl = target.baseUrl
+    userSettings.value.aiApiKey = target.apiKey
+    userSettings.value.aiModelName = target.modelName
+    await saveUserSettings()
+  }
+
   async function saveUserSettings(next?: Partial<UserSettings>) {
     if (next) {
       userSettings.value = { ...userSettings.value, ...next }
     }
+    syncCurrentAiFieldsToProfile()
     if (isTauriEnv() && userSettings.value.globalHotkey) {
       invoke('update_global_hotkey', { hotkey: userSettings.value.globalHotkey }).catch(() => {})
     }
@@ -221,77 +276,103 @@ export const useLauncherStore = defineStore('launcher', () => {
     }
   }
 
-  async function triggerAiQuickAsk(question: string) {
+  async function triggerAiQuickAsk(question: string, customSystemPrompt?: string) {
     const cleanQ = question.replace(/^(\?|？|ai\s+)/i, '').trim()
     if (!cleanQ) return
+    const provider = userSettings.value.aiProvider || 'OpenAI'
+    const apiKey = (userSettings.value.aiApiKey || '').trim()
+    const baseUrl = (userSettings.value.aiBaseUrl || '').trim().replace(/\/+$/, '')
+    const model = (userSettings.value.aiModelName || 'gpt-4o').trim()
+
     aiAnswerState.value = {
       question: cleanQ,
       answer: '正在连接 AI 模型思考中...',
-      loading: true
+      model,
+      loading: true,
+      error: false
     }
-
-    const provider = userSettings.value.aiProvider || 'Google Gemini'
-    const apiKey = (userSettings.value.aiApiKey || '').trim()
-    const baseUrl = (userSettings.value.aiBaseUrl || '').trim().replace(/\/+$/, '')
-    const model = (userSettings.value.aiModelName || 'gemini-2.5-pro').trim()
 
     if (!apiKey && provider !== 'Ollama 本地模型') {
       aiAnswerState.value = {
         question: cleanQ,
-        answer: `[${provider} · ${model}]\n尚未配置 API Key。请前往「设置 -> AI 模型」填写您的 API Key（或切换为 Ollama 本地模型），即可在搜索框享受直达 AI 问答！`,
-        loading: false
+        answer: `[${provider} · ${model}]\n尚未配置 API Key。请前往「个人中心 -> AI 模型」填写您的 API Key（或切换为 Ollama 本地模型），即可享受直达 AI 问答！`,
+        model,
+        loading: false,
+        error: true
       }
       return
     }
 
+    const sysPrompt =
+      customSystemPrompt ||
+      userSettings.value.aiSystemPrompt ||
+      '你是 OmniBox 桌面极客工作台的内置 AI 助手，回答应简洁、准确、结构清晰，涉及代码时直接给出高质量可运行示例。'
+
+    const proxyUrl =
+      userSettings.value.proxyEnabled && userSettings.value.proxyHost
+        ? userSettings.value.proxyHost.trim()
+        : undefined
+
     try {
-      if (provider === 'Google Gemini') {
-        const host = baseUrl || 'https://generativelanguage.googleapis.com'
-        const url = `${host}/v1beta/models/${model}:generateContent?key=${encodeURIComponent(apiKey)}`
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: cleanQ }] }]
-          })
-        })
-        const data = await res.json()
-        const text =
-          data?.candidates?.[0]?.content?.parts?.[0]?.text ||
-          data?.error?.message ||
-          '未获取到有效响应'
-        aiAnswerState.value = { question: cleanQ, answer: text, loading: false }
-      } else {
-        const host =
-          baseUrl ||
-          (provider === 'DeepSeek'
-            ? 'https://api.deepseek.com/v1'
-            : provider === 'Ollama 本地模型'
-              ? 'http://127.0.0.1:11434/v1'
-              : 'https://api.openai.com/v1')
-        const url = `${host.endsWith('/chat/completions') ? host : `${host}/chat/completions`}`
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-        if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`
-        const res = await fetch(url, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            model,
-            messages: [{ role: 'user', content: cleanQ }]
-          })
-        })
-        const data = await res.json()
-        const text =
-          data?.choices?.[0]?.message?.content || data?.error?.message || '未获取到有效响应'
-        aiAnswerState.value = { question: cleanQ, answer: text, loading: false }
+      const res = await requestAiChatCompletion({
+        provider,
+        baseUrl,
+        apiKey,
+        model,
+        messages: [
+          { role: 'system', content: sysPrompt },
+          { role: 'user', content: cleanQ }
+        ],
+        temperature: userSettings.value.aiTemperature ?? 0.7,
+        proxyUrl
+      })
+      aiAnswerState.value = {
+        question: cleanQ,
+        answer: res.content,
+        reasoningContent: res.reasoningContent || null,
+        model: res.model || model,
+        latencyMs: res.latencyMs,
+        totalTokens: res.totalTokens || null,
+        loading: false,
+        error: false
       }
     } catch (e) {
       aiAnswerState.value = {
         question: cleanQ,
         answer: `请求 AI 接口失败: ${String(e)}`,
-        loading: false
+        model,
+        loading: false,
+        error: true
       }
     }
+  }
+
+  function continueQuickAskInAiStudio() {
+    if (!aiAnswerState.value) return
+    const handoffPayload = JSON.stringify({
+      type: 'handoff-qa',
+      question: aiAnswerState.value.question,
+      answer: aiAnswerState.value.answer,
+      reasoningContent: aiAnswerState.value.reasoningContent || null,
+      model: aiAnswerState.value.model || userSettings.value.aiModelName
+    })
+    pluginInitialPayload.value = handoffPayload
+    aiAnswerState.value = null
+    openPlugin('ai-studio')
+  }
+
+  function openAiStudioWithAction(
+    actionMode: 'translate' | 'explain' | 'summarize' | 'shell' | 'chat',
+    inputText: string
+  ) {
+    isSuperPanelOpen.value = false
+    aiAnswerState.value = null
+    pluginInitialPayload.value = JSON.stringify({
+      type: 'quick-action',
+      actionMode,
+      inputText: (inputText || '').trim()
+    })
+    openPlugin('ai-studio')
   }
 
   async function refreshSystemApps(clearIconCache = false) {
@@ -802,6 +883,7 @@ export const useLauncherStore = defineStore('launcher', () => {
       'password-vault': '搜索密码本中的网站、账号、备注...',
       'ip-studio': '输入任意公网 IP 查询归属地，或输入 CIDR (如 192.168.1.0/24) 划分子网...',
       'unit-converter': '输入数值+单位 (如 500g / 100亩 / 1024mb)、时间戳或 #HEX 色值直接换算...',
+      'ai-studio': '搜索历史 AI 会话标题或筛选内置 Prompt 角色指令...',
       'utools-hub': '搜索已挂载的 uTools 扩展或输入 plugin.json 配置...',
       'utools-runner': 'uTools 兼容沙箱子输入框 (window.utools.setSubInput)...',
       'user-center': '在个人中心搜索本机应用或配置项...'
@@ -866,6 +948,7 @@ export const useLauncherStore = defineStore('launcher', () => {
         'password-vault': '密码本',
         'ip-studio': 'IP 与网络工作台',
         'unit-converter': '换算与格式工作台',
+        'ai-studio': 'AI 助手与指令工作台',
         'utools-hub': 'uTools 插件中心',
         'user-center': '个人中心与设置'
       }
@@ -985,6 +1068,7 @@ export const useLauncherStore = defineStore('launcher', () => {
       'password-vault': { id: 'password-vault', name: '密码本', icon: 'KeyRound', badge: 'AES-256 Vault' },
       'ip-studio': { id: 'ip-studio', name: 'IP 与网络工作台', icon: 'Globe', badge: 'IP & CIDR Studio' },
       'unit-converter': { id: 'unit-converter', name: '换算与格式工作台', icon: 'ArrowLeftRight', badge: 'Unit & Format' },
+      'ai-studio': { id: 'ai-studio', name: 'AI 助手工作台', icon: 'Sparkles', badge: 'AI Studio' },
       'utools-hub': { id: 'utools-hub', name: 'uTools 插件中心', icon: 'Blocks', badge: '无限制挂载' },
       'user-center': { id: 'user-center', name: '个人中心与设置', icon: 'SlidersHorizontal', badge: 'Control Hub' }
     }
@@ -997,9 +1081,25 @@ export const useLauncherStore = defineStore('launcher', () => {
     })
 
     const savedSettings = await kvGet<UserSettings>('system', 'user-settings', DEFAULT_USER_SETTINGS)
+    const mergedProfiles = {
+      ...JSON.parse(JSON.stringify(DEFAULT_AI_PROVIDER_PROFILES)),
+      ...(savedSettings?.aiProviderProfiles || {})
+    }
+    const activeProv = savedSettings?.aiProvider || DEFAULT_USER_SETTINGS.aiProvider || 'OpenAI'
+    if (savedSettings?.aiBaseUrl || savedSettings?.aiApiKey || savedSettings?.aiModelName) {
+      mergedProfiles[activeProv] = {
+        ...(mergedProfiles[activeProv] || {}),
+        baseUrl: savedSettings.aiBaseUrl || mergedProfiles[activeProv]?.baseUrl || 'https://api.openai.com/v1',
+        apiKey: savedSettings.aiApiKey ?? mergedProfiles[activeProv]?.apiKey ?? '',
+        modelName: savedSettings.aiModelName || mergedProfiles[activeProv]?.modelName || 'gpt-4o',
+        availableModels: mergedProfiles[activeProv]?.availableModels || []
+      }
+    }
+
     userSettings.value = {
       ...DEFAULT_USER_SETTINGS,
       ...savedSettings,
+      aiProviderProfiles: mergedProfiles,
       vaultAutoLockMinutes: savedSettings?.vaultAutoLockMinutes ?? DEFAULT_USER_SETTINGS.vaultAutoLockMinutes ?? 15,
       vaultClipboardClearSeconds:
         savedSettings?.vaultClipboardClearSeconds ?? DEFAULT_USER_SETTINGS.vaultClipboardClearSeconds ?? 30
@@ -1126,9 +1226,12 @@ export const useLauncherStore = defineStore('launcher', () => {
     toggleTheme,
     setThemeMode,
     saveUserSettings,
+    switchAiProvider,
     syncPreferencesToNative,
     openSuperPanel,
     triggerAiQuickAsk,
+    continueQuickAskInAiStudio,
+    openAiStudioWithAction,
     refreshSystemApps,
     runSearch,
     executeItem,

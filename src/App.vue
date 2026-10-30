@@ -17,6 +17,7 @@ import PasswordVault from '@/plugins/password-vault/PasswordVault.vue'
 import IpStudio from '@/plugins/ip-studio/IpStudio.vue'
 import UnitConverter from '@/plugins/unit-converter/UnitConverter.vue'
 import UtoolsHub from '@/plugins/utools-hub/UtoolsHub.vue'
+import AiStudio from '@/plugins/ai-studio/AiStudio.vue'
 import UserCenter from '@/plugins/user-center/UserCenter.vue'
 
 interface WindowShownContext {
@@ -279,6 +280,7 @@ function handleGlobalKeydown(e: KeyboardEvent) {
       '6': 'ip-studio',
       '7': 'unit-converter',
       '8': 'utools-hub',
+      '9': 'ai-studio',
       ',': 'user-center'
     }
     const lowerKey = e.key.toLowerCase()
@@ -312,6 +314,18 @@ function handleGlobalKeydown(e: KeyboardEvent) {
 function sendSuperPanelTextToPlugin(pluginId: string) {
   const text = store.superPanelClipboard.trim()
   store.isSuperPanelOpen = false
+  if (pluginId === 'ai-translate') {
+    store.openAiStudioWithAction('translate', text || 'Hello, welcome to OmniBox!')
+    return
+  }
+  if (pluginId === 'ai-explain') {
+    store.openAiStudioWithAction('explain', text || '请解释一下这段代码或文本的含义')
+    return
+  }
+  if (pluginId === 'ai-summarize') {
+    store.openAiStudioWithAction('summarize', text || '请帮我总结润色这段内容')
+    return
+  }
   if (pluginId === 'ai-ask') {
     store.triggerAiQuickAsk(text || '请介绍一下 OmniBox 的核心快捷功能')
     return
@@ -320,6 +334,12 @@ function sendSuperPanelTextToPlugin(pluginId: string) {
     store.searchQuery = text
   }
   store.openPlugin(pluginId)
+}
+
+function openAiSettingsFromQuickAsk() {
+  ;(window as any).__omniboxUserCenterInitialTab = 'ai-models'
+  store.aiAnswerState = null
+  store.openPlugin('user-center')
 }
 
 async function copyTextWithToast(text: string, label = '已复制到剪贴板') {
@@ -547,7 +567,46 @@ onUnmounted(() => {
             </div>
 
             <!-- Context Quick Actions -->
-            <div class="grid grid-cols-4 gap-2">
+            <div class="grid grid-cols-3 gap-2">
+              <button
+                type="button"
+                class="flex items-center gap-2 p-2.5 rounded-xl border text-xs font-medium cursor-pointer transition-colors"
+                :class="
+                  store.isDark
+                    ? 'bg-slate-900/70 border-slate-800 hover:border-indigo-500/50 text-slate-200'
+                    : 'bg-white border-slate-200/80 hover:border-indigo-400 text-slate-700'
+                "
+                @click="sendSuperPanelTextToPlugin('ai-translate')"
+              >
+                <IconRenderer name="Globe" :size="15" class-name="text-indigo-400" />
+                <span>AI 深度翻译</span>
+              </button>
+              <button
+                type="button"
+                class="flex items-center gap-2 p-2.5 rounded-xl border text-xs font-medium cursor-pointer transition-colors"
+                :class="
+                  store.isDark
+                    ? 'bg-slate-900/70 border-slate-800 hover:border-indigo-500/50 text-slate-200'
+                    : 'bg-white border-slate-200/80 hover:border-indigo-400 text-slate-700'
+                "
+                @click="sendSuperPanelTextToPlugin('ai-explain')"
+              >
+                <IconRenderer name="Terminal" :size="15" class-name="text-violet-400" />
+                <span>AI 解释代码</span>
+              </button>
+              <button
+                type="button"
+                class="flex items-center gap-2 p-2.5 rounded-xl border text-xs font-medium cursor-pointer transition-colors"
+                :class="
+                  store.isDark
+                    ? 'bg-slate-900/70 border-slate-800 hover:border-indigo-500/50 text-slate-200'
+                    : 'bg-white border-slate-200/80 hover:border-indigo-400 text-slate-700'
+                "
+                @click="sendSuperPanelTextToPlugin('ai-summarize')"
+              >
+                <IconRenderer name="Sparkles" :size="15" class-name="text-fuchsia-400" />
+                <span>AI 总结润色</span>
+              </button>
               <button
                 type="button"
                 class="flex items-center gap-2 p-2.5 rounded-xl border text-xs font-medium cursor-pointer transition-colors"
@@ -558,7 +617,7 @@ onUnmounted(() => {
                 "
                 @click="sendSuperPanelTextToPlugin('json-studio')"
               >
-                <IconRenderer name="Braces" :size="15" class-name="text-indigo-400" />
+                <IconRenderer name="Braces" :size="15" class-name="text-emerald-400" />
                 <span>JSON 格式化</span>
               </button>
               <button
@@ -586,19 +645,6 @@ onUnmounted(() => {
               >
                 <IconRenderer name="GitCompare" :size="15" class-name="text-sky-400" />
                 <span>文本对比</span>
-              </button>
-              <button
-                type="button"
-                class="flex items-center gap-2 p-2.5 rounded-xl border text-xs font-medium cursor-pointer transition-colors"
-                :class="
-                  store.isDark
-                    ? 'bg-slate-900/70 border-slate-800 hover:border-indigo-500/50 text-slate-200'
-                    : 'bg-white border-slate-200/80 hover:border-indigo-400 text-slate-700'
-                "
-                @click="sendSuperPanelTextToPlugin('ai-ask')"
-              >
-                <IconRenderer name="Sparkles" :size="15" class-name="text-violet-400" />
-                <span>AI 解释 / 翻译</span>
               </button>
             </div>
 
@@ -633,14 +679,62 @@ onUnmounted(() => {
             class="flex-1 overflow-y-auto px-5 py-4 space-y-3"
             :class="store.isDark ? 'bg-[#0E131F]' : 'bg-[#F8FAFC]'"
           >
-            <div class="flex items-center justify-between">
-              <div class="flex items-center gap-2">
-                <IconRenderer name="Sparkles" :size="15" class-name="text-indigo-400" />
-                <span class="text-xs font-bold">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex items-center gap-2 min-w-0">
+                <IconRenderer name="Sparkles" :size="15" class-name="text-indigo-400 shrink-0" />
+                <span class="text-xs font-bold truncate">
                   {{ store.userSettings.aiProvider }} · {{ store.userSettings.aiModelName }}
                 </span>
+                <span
+                  v-if="store.aiAnswerState.latencyMs"
+                  class="text-[10.5px] font-mono px-1.5 py-0.5 rounded"
+                  :class="
+                    store.isDark
+                      ? 'bg-slate-800 text-slate-400'
+                      : 'bg-slate-200/70 text-slate-600'
+                  "
+                >
+                  {{ store.aiAnswerState.latencyMs }}ms
+                </span>
               </div>
-              <div class="flex items-center gap-2">
+              <div class="flex items-center gap-2.5 shrink-0">
+                <button
+                  v-if="store.aiAnswerState.answer && !store.aiAnswerState.error"
+                  type="button"
+                  class="px-2.5 py-1 rounded-lg text-[11.5px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                  :class="
+                    store.isDark
+                      ? 'bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border border-indigo-500/30'
+                      : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200'
+                  "
+                  @click="store.continueQuickAskInAiStudio()"
+                >
+                  <IconRenderer name="CornerUpRight" :size="12" />
+                  <span>继续追问 (AI 工作台)</span>
+                </button>
+                <button
+                  v-if="store.aiAnswerState.error"
+                  type="button"
+                  class="px-2.5 py-1 rounded-lg text-[11.5px] font-semibold flex items-center gap-1 cursor-pointer transition-colors"
+                  :class="
+                    store.isDark
+                      ? 'bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 border border-amber-500/30'
+                      : 'bg-amber-50 text-amber-700 hover:bg-amber-100 border border-amber-200'
+                  "
+                  @click="openAiSettingsFromQuickAsk"
+                >
+                  <IconRenderer name="Settings" :size="12" />
+                  <span>前往 AI 模型设置</span>
+                </button>
+                <button
+                  v-if="!store.aiAnswerState.loading"
+                  type="button"
+                  class="text-xs text-slate-400 hover:text-indigo-400 cursor-pointer flex items-center gap-1"
+                  @click="store.triggerAiQuickAsk(store.aiAnswerState.question)"
+                >
+                  <IconRenderer name="RefreshCw" :size="12" />
+                  <span>重试</span>
+                </button>
                 <button
                   v-if="store.aiAnswerState.answer"
                   type="button"
@@ -659,17 +753,39 @@ onUnmounted(() => {
               </div>
             </div>
 
+            <!-- Reasoning Block if returned by DeepSeek R1 / reasoning models -->
+            <details
+              v-if="store.aiAnswerState.reasoningContent"
+              class="rounded-xl border px-3 py-2 text-[11.5px]"
+              :class="
+                store.isDark
+                  ? 'bg-slate-900/50 border-slate-800 text-slate-400'
+                  : 'bg-slate-100/70 border-slate-200/80 text-slate-600'
+              "
+            >
+              <summary class="cursor-pointer font-medium select-none">
+                深度思考过程 (点击展开)
+              </summary>
+              <div class="mt-1.5 pt-1.5 border-t border-slate-700/30 whitespace-pre-wrap font-mono text-[11px] leading-relaxed">
+                {{ store.aiAnswerState.reasoningContent }}
+              </div>
+            </details>
+
             <div
               class="p-3.5 rounded-xl border text-xs leading-relaxed whitespace-pre-wrap select-text"
               :class="
-                store.isDark
-                  ? 'bg-slate-900/90 border-slate-800 text-slate-200'
-                  : 'bg-white border-slate-200 text-slate-800'
+                store.aiAnswerState.error
+                  ? store.isDark
+                    ? 'bg-rose-950/30 border-rose-500/30 text-rose-200'
+                    : 'bg-rose-50 border-rose-200 text-rose-800'
+                  : store.isDark
+                    ? 'bg-slate-900/90 border-slate-800 text-slate-200'
+                    : 'bg-white border-slate-200 text-slate-800'
               "
             >
               <div v-if="store.aiAnswerState.loading" class="flex items-center gap-2 text-slate-400 py-4">
                 <IconRenderer name="RefreshCw" :size="14" class-name="animate-spin text-indigo-400" />
-                <span>正在请求 {{ store.userSettings.aiModelName }} 思考回答中...</span>
+                <span>正在通过原生通道请求 {{ store.userSettings.aiModelName }} 思考回答中...</span>
               </div>
               <div v-else>{{ store.aiAnswerState.answer }}</div>
             </div>
@@ -695,6 +811,7 @@ onUnmounted(() => {
             store.activePluginId === 'utools-hub' || store.activePluginId === 'utools-runner'
           "
         />
+        <AiStudio v-else-if="store.activePluginId === 'ai-studio'" />
         <UserCenter v-else-if="store.activePluginId === 'user-center'" />
       </div>
     </main>

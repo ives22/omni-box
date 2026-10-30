@@ -48,6 +48,9 @@ const gradientStyle = computed(() => {
   if (id.includes('utools-hub')) {
     return 'bg-gradient-to-br from-fuchsia-500 via-purple-500 to-indigo-500 text-white shadow-sm shadow-purple-500/20'
   }
+  if (id.includes('ai-studio')) {
+    return 'bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 text-white shadow-sm shadow-indigo-500/20'
+  }
   if (id.includes('calc-pad') || props.category === 'calc') {
     return 'bg-gradient-to-br from-amber-400 via-orange-500 to-red-500 text-white shadow-sm shadow-orange-500/20'
   }

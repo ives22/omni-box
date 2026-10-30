@@ -4,8 +4,11 @@ import { useLauncherStore } from '@/stores/launcher'
 import {
   CORE_PLUGIN_ITEMS,
   SYSTEM_COMMAND_ITEMS,
+  DEFAULT_AI_PROVIDER_PROFILES,
   decryptVaultData,
   encryptVaultData,
+  fetchAiProviderModels,
+  requestAiChatCompletion,
   kvGet,
   kvPut,
   revealPathInFinder,
@@ -188,6 +191,127 @@ const filteredSystemApps = computed(() => {
 
 const isRecordingGlobalHotkey = ref(false)
 const isRecordingDetachHotkey = ref(false)
+
+// AI Models Config State
+const showAiApiKey = ref(false)
+const isTestingAi = ref(false)
+const isFetchingModels = ref(false)
+const aiTestResult = ref<{ ok: boolean; text: string; latencyMs?: number } | null>(null)
+
+const currentProviderAvailableModels = computed(() => {
+  const provider = store.userSettings.aiProvider || 'OpenAI'
+  const profile = store.userSettings.aiProviderProfiles?.[provider]
+  const list = profile?.availableModels || []
+  const currentModel = store.userSettings.aiModelName?.trim()
+  if (currentModel && !list.includes(currentModel)) {
+    return [currentModel, ...list]
+  }
+  return list
+})
+
+async function handleAiProviderChange(e: Event) {
+  const target = e.target as HTMLSelectElement
+  const nextProvider = target.value
+  aiTestResult.value = null
+  await store.switchAiProvider(nextProvider)
+  store.showToast(`已切换至 ${nextProvider} 独立配置档`)
+}
+
+async function handleFetchAiModels() {
+  const baseUrl = store.userSettings.aiBaseUrl?.trim()
+  const apiKey = store.userSettings.aiApiKey?.trim()
+  const provider = store.userSettings.aiProvider || 'OpenAI'
+  if (!baseUrl) {
+    store.showToast('请先填写 API Endpoint 地址')
+    return
+  }
+  isFetchingModels.value = true
+  aiTestResult.value = null
+  try {
+    const models = await fetchAiProviderModels({
+      provider,
+      baseUrl,
+      apiKey: apiKey || ''
+    })
+    if (!store.userSettings.aiProviderProfiles) {
+      store.userSettings.aiProviderProfiles = { ...DEFAULT_AI_PROVIDER_PROFILES }
+    }
+    const existing = store.userSettings.aiProviderProfiles[provider] || {
+      baseUrl,
+      apiKey: apiKey || '',
+      modelName: store.userSettings.aiModelName || 'gpt-4o-mini',
+      availableModels: []
+    }
+    existing.availableModels = models
+    if (models.length > 0 && !models.includes(store.userSettings.aiModelName || '')) {
+      store.userSettings.aiModelName = models[0]
+      existing.modelName = models[0]
+    }
+    store.userSettings.aiProviderProfiles[provider] = existing
+    await store.saveUserSettings()
+    store.showToast(`已成功从服务端拉取 ${models.length} 个可用模型`)
+  } catch (err: any) {
+    const msg = err?.message || String(err)
+    aiTestResult.value = {
+      ok: false,
+      text: `拉取模型列表失败：${msg}`
+    }
+    store.showToast('拉取模型列表失败')
+  } finally {
+    isFetchingModels.value = false
+  }
+}
+
+async function handleTestAiConnection() {
+  const baseUrl = store.userSettings.aiBaseUrl?.trim()
+  const apiKey = store.userSettings.aiApiKey?.trim()
+  const modelName = store.userSettings.aiModelName?.trim() || 'gpt-4o-mini'
+  const provider = store.userSettings.aiProvider || 'OpenAI'
+
+  if (!baseUrl) {
+    store.showToast('请先填写 API Endpoint 地址')
+    return
+  }
+  if (!apiKey && !provider.includes('Ollama')) {
+    store.showToast('请先填写 API Key 密钥')
+    return
+  }
+
+  await store.saveUserSettings()
+  isTestingAi.value = true
+  aiTestResult.value = null
+
+  try {
+    const res = await requestAiChatCompletion({
+      provider,
+      baseUrl,
+      apiKey: apiKey || '',
+      model: modelName,
+      temperature: store.userSettings.aiTemperature ?? 0.7,
+      messages: [
+        {
+          role: 'user',
+          content: '请用一句话简短回复：“OmniBox AI 连通测试成功！”'
+        }
+      ]
+    })
+    aiTestResult.value = {
+      ok: true,
+      text: res.content || '连通成功（无文本内容返回）',
+      latencyMs: res.latencyMs
+    }
+    store.showToast(`连接测试成功 (${res.latencyMs}ms)`)
+  } catch (err: any) {
+    const msg = err?.message || String(err)
+    aiTestResult.value = {
+      ok: false,
+      text: msg
+    }
+    store.showToast('AI 连接测试未通过')
+  } finally {
+    isTestingAi.value = false
+  }
+}
 
 async function setGlobalHotkeyQuick(hk: string) {
   isRecordingGlobalHotkey.value = false
@@ -1716,19 +1840,51 @@ onMounted(() => {
       <!-- TAB: AI 模型 (AI Models & Agent Endpoint Configuration) -->
       <!-- ======================================================================= -->
       <template v-else-if="activeTab === 'ai-models'">
-        <div class="max-w-[600px] space-y-6 pb-4">
+        <div class="max-w-[660px] space-y-6 pb-4">
           <section class="space-y-4">
-            <h3
-              class="text-[13px] font-semibold"
-              :class="store.isDark ? 'text-indigo-400' : 'text-[#4E5BA6]'"
-            >
-              AI 模型与 Agent 连接
-            </h3>
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <h3
+                  class="text-[13px] font-semibold"
+                  :class="store.isDark ? 'text-indigo-400' : 'text-[#4E5BA6]'"
+                >
+                  AI 模型与多服务商独立配置档
+                </h3>
+                <span
+                  class="text-[10.5px] px-2 py-0.5 rounded-full font-medium"
+                  :class="
+                    store.isDark
+                      ? 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/30'
+                      : 'bg-indigo-50 text-indigo-600 border border-indigo-200/80'
+                  "
+                >
+                  每个服务商自动独立记忆 Endpoint / Key / Model
+                </span>
+              </div>
+              <button
+                type="button"
+                class="h-[28px] px-3 rounded-lg text-[11.5px] font-semibold flex items-center gap-1.5 transition-all"
+                :class="
+                  store.isDark
+                    ? 'bg-indigo-500/20 text-indigo-300 hover:bg-indigo-500/30 border border-indigo-500/30'
+                    : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-200'
+                "
+                @click="store.openPlugin('ai-studio')"
+              >
+                <IconRenderer name="Sparkles" :size="13" />
+                <span>打开 AI 助手工作台 (⌘9)</span>
+              </button>
+            </div>
 
             <div class="space-y-4 pl-3">
               <div class="flex items-center justify-between">
-                <div class="text-[13px] font-medium">启用搜索框 AI 快捷问答</div>
-                <label class="relative inline-flex items-center cursor-pointer">
+                <div>
+                  <div class="text-[13px] font-medium">启用搜索框 AI 快捷问答</div>
+                  <div class="text-[11px] text-slate-400 mt-0.5">
+                    在主搜索框以 <code class="font-mono">?</code> 或 <code class="font-mono">ai </code> 开头输入，或在无本地匹配时按回车直达 AI 速问
+                  </div>
+                </div>
+                <label class="relative inline-flex items-center cursor-pointer shrink-0">
                   <input
                     v-model="store.userSettings.aiQuickAskEnabled"
                     type="checkbox"
@@ -1742,51 +1898,44 @@ onMounted(() => {
               </div>
 
               <div class="flex items-center justify-between">
-                <div class="text-[13px] font-medium">默认 AI 服务提供商</div>
+                <div>
+                  <div class="text-[13px] font-medium">当前激活 AI 服务提供商</div>
+                  <div class="text-[11px] text-slate-400 mt-0.5">
+                    切换服务商会自动保存当前配置并回填目标服务商历史配置
+                  </div>
+                </div>
                 <select
-                  v-model="store.userSettings.aiProvider"
+                  :value="store.userSettings.aiProvider"
                   aria-label="默认 AI 服务提供商"
-                  class="w-[260px] h-[32px] px-3 rounded-md border text-[12.5px] outline-none cursor-pointer"
+                  class="w-[310px] h-[34px] px-3 rounded-md border text-[12.5px] font-medium outline-none cursor-pointer"
                   :class="
                     store.isDark
                       ? 'bg-slate-900 border-slate-700 text-slate-200'
                       : 'bg-white border-slate-300/90 text-slate-800'
                   "
-                  @change="store.saveUserSettings()"
+                  @change="handleAiProviderChange"
                 >
-                  <option value="Google Gemini">Google Gemini</option>
+                  <option value="OpenAI">OpenAI / 兼容中转站 (OneAPI / NewAPI)</option>
                   <option value="DeepSeek">DeepSeek (深度求索)</option>
-                  <option value="OpenAI">OpenAI ChatGPT</option>
+                  <option value="Google Gemini">Google Gemini</option>
                   <option value="Anthropic Claude">Anthropic Claude</option>
-                  <option value="Ollama 本地模型">Ollama 本地大模型</option>
+                  <option value="Ollama 本地模型">Ollama 本地大模型 (免 Key)</option>
                 </select>
               </div>
 
               <div class="flex items-center justify-between">
-                <div class="text-[13px] font-medium">模型名称 (Model ID)</div>
-                <input
-                  v-model="store.userSettings.aiModelName"
-                  type="text"
-                  placeholder="gemini-2.5-pro / deepseek-chat"
-                  aria-label="AI 模型名称"
-                  class="w-[260px] h-[32px] px-3 rounded-md border font-mono text-[12px] outline-none"
-                  :class="
-                    store.isDark
-                      ? 'bg-slate-900 border-slate-700 text-slate-200 focus:border-indigo-500'
-                      : 'bg-white border-slate-300/90 text-slate-800 focus:border-indigo-500'
-                  "
-                  @change="store.saveUserSettings()"
-                />
-              </div>
-
-              <div class="flex items-center justify-between">
-                <div class="text-[13px] font-medium">API Endpoint 地址</div>
+                <div>
+                  <div class="text-[13px] font-medium">API Endpoint 地址</div>
+                  <div class="text-[11px] text-slate-400 mt-0.5">
+                    支持填写基础地址（如 <code class="font-mono">https://api.openai.com/v1</code>）或完整路径，底层通过 Rust 原生发包绕过 CORS
+                  </div>
+                </div>
                 <input
                   v-model="store.userSettings.aiBaseUrl"
                   type="text"
                   placeholder="https://api.openai.com/v1"
                   aria-label="API Endpoint 地址"
-                  class="w-[260px] h-[32px] px-3 rounded-md border font-mono text-[12px] outline-none"
+                  class="w-[310px] h-[34px] px-3 rounded-md border font-mono text-[12px] outline-none shrink-0"
                   :class="
                     store.isDark
                       ? 'bg-slate-900 border-slate-700 text-slate-200 focus:border-indigo-500'
@@ -1797,20 +1946,204 @@ onMounted(() => {
               </div>
 
               <div class="flex items-center justify-between">
-                <div class="text-[13px] font-medium">API Key 密钥</div>
-                <input
-                  v-model="store.userSettings.aiApiKey"
-                  type="password"
-                  placeholder="sk-..."
-                  aria-label="API Key 密钥"
-                  class="w-[260px] h-[32px] px-3 rounded-md border font-mono text-[12px] outline-none"
+                <div>
+                  <div class="text-[13px] font-medium">API Key 密钥</div>
+                  <div class="text-[11px] text-slate-400 mt-0.5">
+                    仅保存在本机 SQLite 配置库中，不会上传任何第三方服务器
+                  </div>
+                </div>
+                <div class="relative w-[310px] shrink-0">
+                  <input
+                    v-model="store.userSettings.aiApiKey"
+                    :type="showAiApiKey ? 'text' : 'password'"
+                    placeholder="sk-..."
+                    aria-label="API Key 密钥"
+                    class="w-full h-[34px] pl-3 pr-9 rounded-md border font-mono text-[12px] outline-none"
+                    :class="
+                      store.isDark
+                        ? 'bg-slate-900 border-slate-700 text-slate-200 focus:border-indigo-500'
+                        : 'bg-white border-slate-300/90 text-slate-800 focus:border-indigo-500'
+                    "
+                    @change="store.saveUserSettings()"
+                  />
+                  <button
+                    type="button"
+                    class="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                    :title="showAiApiKey ? '隐藏密钥' : '显示密钥'"
+                    @click="showAiApiKey = !showAiApiKey"
+                  >
+                    <IconRenderer :name="showAiApiKey ? 'EyeOff' : 'Eye'" :size="14" />
+                  </button>
+                </div>
+              </div>
+
+              <div class="flex items-start justify-between">
+                <div class="pt-1">
+                  <div class="text-[13px] font-medium">模型名称 (Model ID)</div>
+                  <div class="text-[11px] text-slate-400 mt-0.5">
+                    可手动输入，或点击右侧「拉取列表」从服务端 <code class="font-mono">/v1/models</code> 自动同步
+                  </div>
+                </div>
+                <div class="w-[310px] space-y-2 shrink-0">
+                  <div class="flex items-center gap-1.5">
+                    <input
+                      v-model="store.userSettings.aiModelName"
+                      type="text"
+                      placeholder="gpt-4o-mini / deepseek-chat"
+                      aria-label="AI 模型名称"
+                      class="flex-1 min-w-0 h-[34px] px-3 rounded-md border font-mono text-[12px] outline-none"
+                      :class="
+                        store.isDark
+                          ? 'bg-slate-900 border-slate-700 text-slate-200 focus:border-indigo-500'
+                          : 'bg-white border-slate-300/90 text-slate-800 focus:border-indigo-500'
+                      "
+                      @change="store.saveUserSettings()"
+                    />
+                    <button
+                      type="button"
+                      :disabled="isFetchingModels"
+                      class="h-[34px] px-2.5 rounded-md border text-[11.5px] font-medium flex items-center gap-1 shrink-0 transition-colors disabled:opacity-50"
+                      :class="
+                        store.isDark
+                          ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
+                          : 'bg-slate-50 border-slate-300/90 text-slate-700 hover:bg-slate-100'
+                      "
+                      title="从当前 Endpoint 的 /v1/models 接口拉取可用模型列表"
+                      @click="handleFetchAiModels"
+                    >
+                      <IconRenderer
+                        name="RefreshCw"
+                        :size="12"
+                        :class="isFetchingModels ? 'animate-spin' : ''"
+                      />
+                      <span>{{ isFetchingModels ? '拉取中' : '拉取列表' }}</span>
+                    </button>
+                  </div>
+
+                  <div v-if="currentProviderAvailableModels.length > 1" class="flex items-center gap-2">
+                    <span class="text-[11px] text-slate-400 shrink-0">快速切换模型:</span>
+                    <select
+                      v-model="store.userSettings.aiModelName"
+                      aria-label="从可用模型列表中选择"
+                      class="flex-1 min-w-0 h-[28px] px-2 rounded border font-mono text-[11px] outline-none cursor-pointer"
+                      :class="
+                        store.isDark
+                          ? 'bg-slate-900/80 border-slate-700 text-slate-300'
+                          : 'bg-slate-50 border-slate-200 text-slate-700'
+                      "
+                      @change="store.saveUserSettings()"
+                    >
+                      <option
+                        v-for="m in currentProviderAvailableModels"
+                        :key="m"
+                        :value="m"
+                      >
+                        {{ m }}
+                      </option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 采样温度与默认系统提示词 -->
+              <div class="flex items-center justify-between pt-1">
+                <div>
+                  <div class="text-[13px] font-medium">
+                    采样温度 (Temperature: {{ (store.userSettings.aiTemperature ?? 0.7).toFixed(1) }})
+                  </div>
+                  <div class="text-[11px] text-slate-400 mt-0.5">
+                    越低越严谨确定（适合代码/翻译），越高越具发散创造力
+                  </div>
+                </div>
+                <div class="w-[310px] flex items-center gap-3 shrink-0">
+                  <span class="text-[11px] font-mono text-slate-400">0.0</span>
+                  <input
+                    v-model.number="store.userSettings.aiTemperature"
+                    type="range"
+                    min="0"
+                    max="1.5"
+                    step="0.1"
+                    class="flex-1 accent-indigo-500 cursor-pointer"
+                    @change="store.saveUserSettings()"
+                  />
+                  <span class="text-[11px] font-mono text-slate-400">1.5</span>
+                </div>
+              </div>
+
+              <div class="space-y-1.5 pt-1">
+                <div class="flex items-center justify-between">
+                  <div class="text-[13px] font-medium">全局默认系统提示词 (System Prompt)</div>
+                  <span class="text-[11px] text-slate-400">用于搜索框 AI 速问与默认助手角色</span>
+                </div>
+                <textarea
+                  v-model="store.userSettings.aiSystemPrompt"
+                  rows="2"
+                  placeholder="你是 OmniBox 桌面效率启动器的内置 AI 助手，请用简洁、准确、结构清晰的中文回答问题。"
+                  class="w-full p-2.5 rounded-md border text-[12px] leading-relaxed outline-none resize-none"
                   :class="
                     store.isDark
                       ? 'bg-slate-900 border-slate-700 text-slate-200 focus:border-indigo-500'
                       : 'bg-white border-slate-300/90 text-slate-800 focus:border-indigo-500'
                   "
                   @change="store.saveUserSettings()"
-                />
+                ></textarea>
+              </div>
+
+              <!-- 连通性测试操作栏与诊断面板 -->
+              <div class="pt-2 flex items-center justify-between gap-3">
+                <div class="flex items-center gap-2">
+                  <button
+                    type="button"
+                    :disabled="isTestingAi"
+                    class="h-[34px] px-4 rounded-lg text-[12.5px] font-semibold flex items-center gap-1.5 transition-all disabled:opacity-50"
+                    :class="
+                      store.isDark
+                        ? 'bg-indigo-500 text-white hover:bg-indigo-400'
+                        : 'bg-[#4E5BA6] text-white hover:bg-[#414d91]'
+                    "
+                    @click="handleTestAiConnection"
+                  >
+                    <IconRenderer
+                      :name="isTestingAi ? 'RefreshCw' : 'Zap'"
+                      :size="14"
+                      :class="isTestingAi ? 'animate-spin' : ''"
+                    />
+                    <span>{{ isTestingAi ? '正在请求模型验证连通性...' : '⚡ 测试 API 连通性' }}</span>
+                  </button>
+                </div>
+
+                <span class="text-[11px] text-slate-400">
+                  当前配置档：<strong class="text-slate-600 dark:text-slate-300">{{ store.userSettings.aiProvider }}</strong>
+                  · <code class="font-mono">{{ store.userSettings.aiModelName }}</code>
+                </span>
+              </div>
+
+              <!-- 测试结果反馈卡片 -->
+              <div
+                v-if="aiTestResult"
+                class="p-3.5 rounded-xl border text-[12px] leading-relaxed transition-all"
+                :class="
+                  aiTestResult.ok
+                    ? store.isDark
+                      ? 'bg-emerald-950/30 border-emerald-500/30 text-emerald-200'
+                      : 'bg-emerald-50/80 border-emerald-200 text-emerald-800'
+                    : store.isDark
+                      ? 'bg-rose-950/30 border-rose-500/30 text-rose-200'
+                      : 'bg-rose-50/80 border-rose-200 text-rose-800'
+                "
+              >
+                <div class="flex items-center justify-between mb-1">
+                  <div class="font-semibold flex items-center gap-1.5">
+                    <IconRenderer :name="aiTestResult.ok ? 'CheckCircle2' : 'AlertTriangle'" :size="14" />
+                    <span>{{ aiTestResult.ok ? '接口连通正常' : '接口请求异常' }}</span>
+                  </div>
+                  <span v-if="aiTestResult.latencyMs" class="text-[11px] font-mono opacity-80">
+                    耗时 {{ aiTestResult.latencyMs }} ms
+                  </span>
+                </div>
+                <div class="font-mono text-[11.5px] whitespace-pre-wrap break-all opacity-90">
+                  {{ aiTestResult.text }}
+                </div>
               </div>
             </div>
           </section>
