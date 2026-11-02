@@ -1,6 +1,6 @@
 import jsQR from 'jsqr'
 import QRCode from 'qrcode'
-import type { TotpEntry } from '@/bridge/backend'
+import { decodeQrFromDataUrlNative, isTauriEnv, type TotpEntry } from '@/bridge/backend'
 
 export interface ParsedOtpPayload {
   ok: boolean
@@ -216,11 +216,19 @@ function loadImageElement(source: string | Blob): Promise<HTMLImageElement> {
 
 /**
  * Multi-pass high-tolerance QR Code decoder:
+ * 0. Uses native macOS CoreImage (`CIDetectorTypeQRCode`) hardware-accelerated decoder first when available
  * 1. Adds a synthetic White Quiet Zone border (28px) around tightly cropped user selections
- * 2. Tries multiple scales (1.0x, 1.75x, 0.65x, 2.4x)
+ * 2. Tries multiple scales (1.0x, 1.6x, 0.65x, 2.2x)
  * 3. Tries high-contrast binarization pass if standard pass fails
  */
 export async function decodeQrFromImageSource(source: string | Blob): Promise<string | null> {
+  if (isTauriEnv() && typeof source === 'string' && source.startsWith('data:image/')) {
+    const nativeHit = await decodeQrFromDataUrlNative(source)
+    if (nativeHit && nativeHit.trim()) {
+      return nativeHit.trim()
+    }
+  }
+
   const img = await loadImageElement(source)
   const srcW = img.naturalWidth || img.width
   const srcH = img.naturalHeight || img.height
@@ -229,6 +237,22 @@ export async function decodeQrFromImageSource(source: string | Blob): Promise<st
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d', { willReadFrequently: true })
   if (!ctx) return null
+
+  // If input was a File/Blob in Tauri, also try native macOS CIDetector via canvas PNG export
+  if (isTauriEnv() && typeof source !== 'string') {
+    canvas.width = srcW
+    canvas.height = srcH
+    ctx.drawImage(img, 0, 0, srcW, srcH)
+    try {
+      const dataUrl = canvas.toDataURL('image/png')
+      const nativeHit = await decodeQrFromDataUrlNative(dataUrl)
+      if (nativeHit && nativeHit.trim()) {
+        return nativeHit.trim()
+      }
+    } catch {
+      // Fall through to jsQR
+    }
+  }
 
   const scales = [1.0, 1.6, 0.65, 2.2]
   const quietZone = 28

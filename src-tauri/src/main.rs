@@ -36,6 +36,7 @@ static IS_DETACHED_WINDOW: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "macos")]
 static DETACHED_WINDOW_COUNT: AtomicU32 = AtomicU32::new(0);
 static ALLOW_APP_EXIT: AtomicBool = AtomicBool::new(false);
+static IS_SCREEN_CAPTURING: AtomicBool = AtomicBool::new(false);
 #[cfg(target_os = "macos")]
 static SUPER_PANEL_ENABLED: AtomicBool = AtomicBool::new(true);
 #[cfg(target_os = "macos")]
@@ -107,6 +108,10 @@ extern "C" {
     fn CGPreflightScreenCaptureAccess() -> bool;
     fn CGRequestScreenCaptureAccess() -> bool;
 }
+
+#[cfg(target_os = "macos")]
+#[link(name = "CoreImage", kind = "framework")]
+extern "C" {}
 
 #[cfg(target_os = "macos")]
 #[link(name = "objc")]
@@ -1927,10 +1932,12 @@ fn spawn_macos_global_hotkey_listener(app_handle: AppHandle, hotkey_ref: Arc<Mut
                 let opt_down = (flags & FLAG_OPT) != 0;
                 let ctrl_down = (flags & FLAG_CTRL) != 0;
                 let shift_down = (flags & FLAG_SHIFT) != 0;
+                let is_capturing = IS_SCREEN_CAPTURING.load(Ordering::Relaxed);
 
                 // 0a. Click outside window bounds -> automatically close/hide OmniBox
-                //     (Only when HIDE_ON_BLUR_ENABLED is true AND not pinned on top AND not detached)
-                if mouse_down
+                //     (Only when HIDE_ON_BLUR_ENABLED is true AND not pinned on top AND not detached AND not in interactive screen capture)
+                if !is_capturing
+                    && mouse_down
                     && !prev_mouse_down
                     && HIDE_ON_BLUR_ENABLED.load(Ordering::Relaxed)
                     && !IS_PINNED_ON_TOP.load(Ordering::Relaxed)
@@ -1980,7 +1987,7 @@ fn spawn_macos_global_hotkey_listener(app_handle: AppHandle, hotkey_ref: Arc<Mut
                 prev_mouse_down = mouse_down;
 
                 // 0b. Super Panel Mouse Hold Detection (Long-press Right Click / Middle Click / Ctrl+Right Click)
-                if SUPER_PANEL_ENABLED.load(Ordering::Relaxed) {
+                if !is_capturing && SUPER_PANEL_ENABLED.load(Ordering::Relaxed) {
                     let trigger_mode = SUPER_PANEL_TRIGGER_MODE.load(Ordering::Relaxed);
                     let sp_btn_down = match trigger_mode {
                         1 => mid_btn,
@@ -2035,7 +2042,7 @@ fn spawn_macos_global_hotkey_listener(app_handle: AppHandle, hotkey_ref: Arc<Mut
                 }
 
                 // 0. Native Escape (kVK_Escape = 53) handler when OmniBox window is visible
-                if esc_down && !prev_esc_down && !cmd_down && !opt_down && !ctrl_down {
+                if !is_capturing && esc_down && !prev_esc_down && !cmd_down && !opt_down && !ctrl_down {
                     let handle_clone = app_handle.clone();
                     let _ = app_handle.run_on_main_thread(move || {
                         if let Some(win) = handle_clone.get_webview_window("main") {
@@ -2343,6 +2350,138 @@ fn vault_decrypt_payload(master_password: String, packet_json: String) -> Result
     String::from_utf8(plain_bytes).map_err(|e| e.to_string())
 }
 
+#[cfg(target_os = "macos")]
+fn decode_qr_bytes_macos(image_bytes: &[u8]) -> Option<String> {
+    if image_bytes.is_empty() {
+        return None;
+    }
+    unsafe {
+        use std::ffi::{c_void, CStr};
+        let cls_data = objc_getClass(b"NSData\0".as_ptr() as _);
+        let cls_ci_image = objc_getClass(b"CIImage\0".as_ptr() as _);
+        let cls_ci_detector = objc_getClass(b"CIDetector\0".as_ptr() as _);
+        let cls_str = objc_getClass(b"NSString\0".as_ptr() as _);
+        if cls_data.is_null()
+            || cls_ci_image.is_null()
+            || cls_ci_detector.is_null()
+            || cls_str.is_null()
+        {
+            return None;
+        }
+
+        let send_data: unsafe extern "C" fn(
+            *mut c_void,
+            *mut c_void,
+            *const c_void,
+            usize,
+        ) -> *mut c_void = std::mem::transmute(objc_msgSend as *const ());
+        let send_id_ptr: unsafe extern "C" fn(
+            *mut c_void,
+            *mut c_void,
+            *const c_void,
+        ) -> *mut c_void = std::mem::transmute(objc_msgSend as *const ());
+        let send_detector: unsafe extern "C" fn(
+            *mut c_void,
+            *mut c_void,
+            *mut c_void,
+            *mut c_void,
+            *mut c_void,
+        ) -> *mut c_void = std::mem::transmute(objc_msgSend as *const ());
+        let send_usize: unsafe extern "C" fn(*mut c_void, *mut c_void) -> usize =
+            std::mem::transmute(objc_msgSend as *const ());
+        let send_idx: unsafe extern "C" fn(*mut c_void, *mut c_void, usize) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        let send_id: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void =
+            std::mem::transmute(objc_msgSend as *const ());
+        let send_cstr: unsafe extern "C" fn(
+            *mut c_void,
+            *mut c_void,
+        ) -> *const std::os::raw::c_char = std::mem::transmute(objc_msgSend as *const ());
+
+        let sel_data = sel_registerName(b"dataWithBytes:length:\0".as_ptr() as _);
+        let ns_data = send_data(
+            cls_data,
+            sel_data,
+            image_bytes.as_ptr() as _,
+            image_bytes.len(),
+        );
+        if ns_data.is_null() {
+            return None;
+        }
+
+        let sel_image_data = sel_registerName(b"imageWithData:\0".as_ptr() as _);
+        let ci_image = send_id_ptr(cls_ci_image, sel_image_data, ns_data);
+        if ci_image.is_null() {
+            return None;
+        }
+
+        let sel_utf8 = sel_registerName(b"stringWithUTF8String:\0".as_ptr() as _);
+        let qr_type = send_id_ptr(cls_str, sel_utf8, b"CIDetectorTypeQRCode\0".as_ptr() as _);
+        let sel_detector = sel_registerName(b"detectorOfType:context:options:\0".as_ptr() as _);
+        let detector = send_detector(
+            cls_ci_detector,
+            sel_detector,
+            qr_type,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        if detector.is_null() {
+            return None;
+        }
+
+        let sel_features = sel_registerName(b"featuresInImage:\0".as_ptr() as _);
+        let features = send_id_ptr(detector, sel_features, ci_image);
+        if features.is_null() {
+            return None;
+        }
+
+        let sel_count = sel_registerName(b"count\0".as_ptr() as _);
+        let count = send_usize(features, sel_count);
+        if count == 0 {
+            return None;
+        }
+
+        let sel_obj_at = sel_registerName(b"objectAtIndex:\0".as_ptr() as _);
+        let sel_msg = sel_registerName(b"messageString\0".as_ptr() as _);
+        let sel_cstr = sel_registerName(b"UTF8String\0".as_ptr() as _);
+
+        for i in 0..count {
+            let feat = send_idx(features, sel_obj_at, i);
+            if !feat.is_null() {
+                let ns_msg = send_id(feat, sel_msg);
+                if !ns_msg.is_null() {
+                    let c_ptr = send_cstr(ns_msg, sel_cstr);
+                    if !c_ptr.is_null() {
+                        let s = CStr::from_ptr(c_ptr).to_string_lossy().trim().to_string();
+                        if !s.is_empty() {
+                            return Some(s);
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+}
+
+#[tauri::command]
+fn decode_qr_from_data_url(data_url: String) -> Option<String> {
+    let b64_part = data_url
+        .split_once(",")
+        .map(|(_, b)| b.trim())
+        .unwrap_or_else(|| data_url.trim());
+    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, b64_part).ok()?;
+    #[cfg(target_os = "macos")]
+    {
+        decode_qr_bytes_macos(&bytes)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = bytes;
+        None
+    }
+}
+
 #[tauri::command]
 fn check_screen_capture_permission(prompt_if_needed: Option<bool>) -> bool {
     #[cfg(target_os = "macos")]
@@ -2360,6 +2499,23 @@ fn check_screen_capture_permission(prompt_if_needed: Option<bool>) -> bool {
         let _ = prompt_if_needed;
         true
     }
+}
+
+#[tauri::command]
+fn reset_screen_capture_permission() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = Command::new("tccutil")
+            .args(["reset", "ScreenCapture", "com.omnibox.launcher"])
+            .output();
+        unsafe {
+            let _ = CGRequestScreenCaptureAccess();
+        }
+        let _ = Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+            .spawn();
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -2399,19 +2555,35 @@ fn relaunch_application(app_handle: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+struct ScreenCaptureGuard;
+impl Drop for ScreenCaptureGuard {
+    fn drop(&mut self) {
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(140));
+            IS_SCREEN_CAPTURING.store(false, Ordering::SeqCst);
+        });
+    }
+}
+
 #[tauri::command]
 async fn capture_screen_region_base64(
     window: tauri::WebviewWindow,
     app_handle: AppHandle,
+    skip_preflight: Option<bool>,
 ) -> Result<Option<String>, String> {
-    // Step 0: Pre-flight check for macOS Screen Recording permission BEFORE hiding window or showing crosshair!
+    // Step 0: Pre-flight check for macOS Screen Recording permission BEFORE hiding window or showing crosshair
     #[cfg(target_os = "macos")]
-    unsafe {
-        if !CGPreflightScreenCaptureAccess() {
-            let _ = CGRequestScreenCaptureAccess();
-            return Err("SCREEN_PERMISSION_DENIED".to_string());
+    if !skip_preflight.unwrap_or(false) {
+        unsafe {
+            if !CGPreflightScreenCaptureAccess() {
+                let _ = CGRequestScreenCaptureAccess();
+                return Err("SCREEN_PERMISSION_DENIED".to_string());
+            }
         }
     }
+
+    IS_SCREEN_CAPTURING.store(true, Ordering::SeqCst);
+    let _capture_guard = ScreenCaptureGuard;
 
     let is_main = window.label() == "main";
 
@@ -2469,6 +2641,7 @@ async fn capture_screen_region_base64(
     // Step 3: Restore the OmniBox window in-place and refocus on the macOS AppKit Main Thread
     let win_for_show = window.clone();
     let _ = app_handle.run_on_main_thread(move || {
+        let _ = win_for_show.show();
         #[cfg(target_os = "macos")]
         {
             if let Ok(ns_win) = win_for_show.ns_window() {
@@ -2507,7 +2680,6 @@ async fn capture_screen_region_base64(
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = win_for_show.show();
             let _ = win_for_show.set_focus();
         }
     });
@@ -4122,7 +4294,9 @@ fn main() {
             kv_storage_put,
             vault_encrypt_payload,
             vault_decrypt_payload,
+            decode_qr_from_data_url,
             check_screen_capture_permission,
+            reset_screen_capture_permission,
             open_screen_capture_preferences,
             relaunch_application,
             capture_screen_region_base64,

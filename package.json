@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "tauri": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri",
     "build:mac": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build",
-    "install:mac": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build && rm -rf /Applications/OmniBox.app && cp -R src-tauri/target/release/bundle/macos/OmniBox.app /Applications/OmniBox.app"
+    "install:mac": "PATH=\"$HOME/.cargo/bin:$PATH\" tauri build && rm -rf /Applications/OmniBox.app && cp -R src-tauri/target/release/bundle/macos/OmniBox.app /Applications/OmniBox.app && SIGN_ID=$(security find-identity -p codesigning -v 2>/dev/null | awk '/Apple Development:/ {print $2; exit}') && codesign --force --deep --sign \"${SIGN_ID:--}\" --identifier com.omnibox.launcher /Applications/OmniBox.app"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.1.1",

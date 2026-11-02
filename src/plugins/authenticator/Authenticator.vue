@@ -5,6 +5,7 @@ import {
   TotpEntry,
   captureScreenRegionBase64,
   checkScreenCapturePermission,
+  resetScreenCapturePermission,
   openScreenCapturePreferences,
   relaunchApplication,
   readClipboardImageBase64,
@@ -167,7 +168,8 @@ async function processRecognizedPayload(rawText: string, sourceTag = '扫码') {
  * 1. Interactive Crosshair Screen Region QR Scan (Cmd+Shift+S or Scan Button)
  * Pre-verifies macOS Screen Recording permission BEFORE starting crosshair selection!
  */
-async function handleScreenQrScan() {
+async function handleScreenQrScan(skipPreflight: boolean | Event = false) {
+  const shouldSkipPreflight = skipPreflight === true
   if (isScanningScreen.value) return
   if (!isTauriEnv()) {
     store.showToast('当前处于浏览器预览环境，请使用「图片识别」或直接粘贴二维码图片', 'info')
@@ -176,22 +178,24 @@ async function handleScreenQrScan() {
   }
 
   // Step 0: Check macOS Screen Recording permission upfront so user never gets a non-working crosshair
-  const hasPermission = await checkScreenCapturePermission(true)
-  if (!hasPermission) {
-    showScreenPermissionModal.value = true
-    try {
-      await openScreenCapturePreferences()
-    } catch {
-      // ignore
+  if (!shouldSkipPreflight) {
+    const hasPermission = await checkScreenCapturePermission(true)
+    if (!hasPermission) {
+      showScreenPermissionModal.value = true
+      try {
+        await openScreenCapturePreferences()
+      } catch {
+        // ignore
+      }
+      return
     }
-    return
   }
 
   showScreenPermissionModal.value = false
 
   try {
     isScanningScreen.value = true
-    const dataUrl = await captureScreenRegionBase64()
+    const dataUrl = await captureScreenRegionBase64(shouldSkipPreflight)
     if (!dataUrl) {
       // User pressed Esc to cancel selection
       return
@@ -199,6 +203,15 @@ async function handleScreenQrScan() {
 
     const qrText = await decodeQrFromImageSource(dataUrl)
     if (!qrText) {
+      const grantedNow = await checkScreenCapturePermission(false)
+      if (!grantedNow) {
+        showScreenPermissionModal.value = true
+        store.showToast(
+          '录屏权限尚未对当前进程生效（系统仅截取了桌面背景），请点击「2. 已授权，重启生效」',
+          'warning'
+        )
+        return
+      }
       store.showToast('未在框选区域内识别到二维码，请确保完整框住二维码图案', 'warning')
       return
     }
@@ -230,17 +243,36 @@ async function handleOpenSystemScreenPrefs() {
   }
 }
 
+async function handleResetPermissionCache() {
+  try {
+    await resetScreenCapturePermission()
+    store.showToast(
+      '已重置旧版权限缓存！请在弹出的系统设置中打开 OmniBox 开关，然后点击「2. 已授权，重启生效」',
+      'info'
+    )
+  } catch {
+    store.showToast('重置权限缓存失败，请在系统设置中手动关闭再重新打开 OmniBox 开关', 'warning')
+  }
+}
+
 async function handleRecheckPermissionAndScan() {
   const granted = await checkScreenCapturePermission(false)
-  if (!granted) {
-    store.showToast('macOS 录屏权限开启后需重启软件生效，请点击「重启 OmniBox 生效」', 'warning')
+  if (granted) {
+    showScreenPermissionModal.value = false
+    await handleScreenQrScan(false)
     return
   }
+  // Even if CGPreflightScreenCaptureAccess still caches false before restart, allow direct scan attempt
   showScreenPermissionModal.value = false
-  await handleScreenQrScan()
+  await handleScreenQrScan(true)
 }
 
 async function handleRelaunchForPermission() {
+  try {
+    localStorage.setItem('omnibox:reopen_plugin_after_relaunch', 'authenticator')
+  } catch {
+    // ignore
+  }
   await relaunchApplication()
 }
 
@@ -1337,39 +1369,55 @@ onUnmounted(() => {
             <span class="w-4 h-4 rounded-full bg-indigo-500/20 text-indigo-500 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">2</span>
             <span>
               在列表中找到 <strong>OmniBox</strong> 并打开右侧开关
-              <span class="text-amber-500 font-medium">（若开关原本已开启，请先关闭再重新打开一次以刷新版本授权）</span>；
+              <span class="text-amber-500 font-medium">（若开关原本就是开启状态但仍弹此提示，请先点击下方「重置旧版权限缓存」或将开关关闭再重新打开）</span>；
             </span>
           </div>
           <div class="flex items-start gap-2">
             <span class="w-4 h-4 rounded-full bg-indigo-500/20 text-indigo-500 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">3</span>
-            <span>开启后点击 <strong>「重启 OmniBox 立即生效」</strong> 即可正常框选扫码。</span>
+            <span>开启后点击 <strong>「2. 已授权，重启生效」</strong>（重启后将自动回到此 2FA 页面）。</span>
           </div>
         </div>
 
         <!-- Primary Permission Actions -->
         <div class="space-y-2 text-xs">
-          <button
-            type="button"
-            class="w-full py-2.5 px-3.5 rounded-xl font-semibold text-white bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
-            @click="handleOpenSystemScreenPrefs"
-          >
-            <IconRenderer name="Settings" :size="14" />
-            <span>1. 打开系统「录屏与系统录音」设置</span>
-          </button>
-
           <div class="grid grid-cols-2 gap-2">
             <button
               type="button"
-              class="py-2 px-3 rounded-xl font-semibold border cursor-pointer transition-colors flex items-center justify-center gap-1.5"
+              class="py-2.5 px-3 rounded-xl font-semibold text-white bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+              @click="handleOpenSystemScreenPrefs"
+            >
+              <IconRenderer name="Settings" :size="14" />
+              <span>1. 打开系统录屏设置</span>
+            </button>
+
+            <button
+              type="button"
+              class="py-2.5 px-3 rounded-xl font-semibold border cursor-pointer transition-colors flex items-center justify-center gap-1.5"
               :class="
                 store.isDark
-                  ? 'bg-emerald-500/15 hover:bg-emerald-500/25 border-emerald-500/35 text-emerald-300'
-                  : 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-700'
+                  ? 'bg-emerald-500/20 hover:bg-emerald-500/30 border-emerald-500/45 text-emerald-300'
+                  : 'bg-emerald-600 hover:bg-emerald-500 border-emerald-600 text-white shadow-sm'
               "
               @click="handleRelaunchForPermission"
             >
               <IconRenderer name="RefreshCw" :size="13" />
               <span>2. 已授权，重启生效</span>
+            </button>
+          </div>
+
+          <div class="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              class="py-2 px-3 rounded-xl font-medium border cursor-pointer transition-colors flex items-center justify-center gap-1.5"
+              :class="
+                store.isDark
+                  ? 'bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30 text-amber-300'
+                  : 'bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-800'
+              "
+              @click="handleResetPermissionCache"
+            >
+              <IconRenderer name="ShieldAlert" :size="13" />
+              <span>重置旧版权限缓存</span>
             </button>
             <button
               type="button"
@@ -1377,7 +1425,7 @@ onUnmounted(() => {
               @click="handleRecheckPermissionAndScan"
             >
               <IconRenderer name="ScanLine" :size="13" />
-              <span>重新检测并扫码</span>
+              <span>直接尝试框选扫码</span>
             </button>
           </div>
         </div>

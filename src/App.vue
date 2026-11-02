@@ -401,7 +401,19 @@ onMounted(async () => {
   }
 
   await store.initStore()
-  if (!store.isStandaloneWindow) {
+  try {
+    const reopenPlugin = localStorage.getItem('omnibox:reopen_plugin_after_relaunch')
+    if (reopenPlugin) {
+      localStorage.removeItem('omnibox:reopen_plugin_after_relaunch')
+      store.openPlugin(reopenPlugin)
+      setTimeout(() => {
+        store.showToast('OmniBox 已重启完成，现在可以直接点击「扫码添加」了')
+      }, 280)
+    }
+  } catch {
+    // ignore
+  }
+  if (!store.isStandaloneWindow && !store.activePluginId) {
     syncCompactLauncherHeight(true)
   }
   window.addEventListener('keydown', handleGlobalKeydown, true)

@@ -1149,6 +1149,30 @@ export async function checkScreenCapturePermission(promptIfNeeded = false): Prom
 }
 
 /**
+ * Reset stale macOS TCC ScreenCapture approval record (`tccutil reset ScreenCapture com.omnibox.launcher`),
+ * re-trigger `CGRequestScreenCaptureAccess()`, and open System Settings -> Screen Recording.
+ */
+export async function resetScreenCapturePermission(): Promise<void> {
+  if (isTauriEnv()) {
+    await invoke('reset_screen_capture_permission')
+  }
+}
+
+/**
+ * Decode QR code string using native macOS CoreImage `CIDetectorTypeQRCode` engine.
+ */
+export async function decodeQrFromDataUrlNative(dataUrl: string): Promise<string | null> {
+  if (isTauriEnv()) {
+    try {
+      return await invoke<string | null>('decode_qr_from_data_url', { dataUrl })
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
+/**
  * Open macOS System Settings -> Privacy & Security -> Screen & System Audio Recording directly.
  */
 export async function openScreenCapturePreferences(): Promise<void> {
@@ -1170,9 +1194,9 @@ export async function relaunchApplication(): Promise<void> {
  * Trigger interactive macOS crosshair screen region selection (`screencapture -i -x`),
  * automatically hiding and restoring the current OmniBox window so underlying QR codes are never obscured.
  */
-export async function captureScreenRegionBase64(): Promise<string | null> {
+export async function captureScreenRegionBase64(skipPreflight = false): Promise<string | null> {
   if (isTauriEnv()) {
-    return await invoke<string | null>('capture_screen_region_base64')
+    return await invoke<string | null>('capture_screen_region_base64', { skipPreflight })
   }
   return null
 }
