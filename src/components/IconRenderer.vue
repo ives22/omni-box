@@ -70,7 +70,8 @@ import {
   Layers,
   Clock,
   ClipboardCheck,
-  Shield
+  Shield,
+  ShieldAlert
 } from 'lucide-vue-next'
 
 const props = withDefaults(
@@ -157,7 +158,8 @@ const iconMap: Record<string, unknown> = {
   Layers,
   Clock,
   ClipboardCheck,
-  Shield
+  Shield,
+  ShieldAlert
 }
 
 const resolvedIcon = computed(() => {

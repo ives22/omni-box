@@ -104,6 +104,8 @@ extern "C" {
         display_count: *mut u32,
     ) -> i32;
     fn CGDisplayBounds(display: u32) -> CGRect;
+    fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGRequestScreenCaptureAccess() -> bool;
 }
 
 #[cfg(target_os = "macos")]
@@ -2342,10 +2344,75 @@ fn vault_decrypt_payload(master_password: String, packet_json: String) -> Result
 }
 
 #[tauri::command]
+fn check_screen_capture_permission(prompt_if_needed: Option<bool>) -> bool {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        if CGPreflightScreenCaptureAccess() {
+            return true;
+        }
+        if prompt_if_needed.unwrap_or(false) {
+            return CGRequestScreenCaptureAccess();
+        }
+        false
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = prompt_if_needed;
+        true
+    }
+}
+
+#[tauri::command]
+fn open_screen_capture_preferences() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+            .spawn()
+            .map_err(|e| format!("无法打开系统设置: {}", e))?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn relaunch_application(app_handle: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        ALLOW_APP_EXIT.store(true, Ordering::Relaxed);
+        let app_bundle = PathBuf::from("/Applications/OmniBox.app");
+        if app_bundle.exists() {
+            let _ = Command::new("sh")
+                .args(["-c", "sleep 0.35 && open /Applications/OmniBox.app"])
+                .spawn();
+        } else if let Ok(exe) = std::env::current_exe() {
+            let exe_str = exe.to_string_lossy().to_string();
+            let _ = Command::new("sh")
+                .args(["-c", &format!("sleep 0.35 && \"{}\"", exe_str)])
+                .spawn();
+        }
+        app_handle.exit(0);
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        app_handle.restart();
+    }
+    Ok(())
+}
+
+#[tauri::command]
 async fn capture_screen_region_base64(
     window: tauri::WebviewWindow,
     app_handle: AppHandle,
 ) -> Result<Option<String>, String> {
+    // Step 0: Pre-flight check for macOS Screen Recording permission BEFORE hiding window or showing crosshair!
+    #[cfg(target_os = "macos")]
+    unsafe {
+        if !CGPreflightScreenCaptureAccess() {
+            let _ = CGRequestScreenCaptureAccess();
+            return Err("SCREEN_PERMISSION_DENIED".to_string());
+        }
+    }
+
     let is_main = window.label() == "main";
 
     // Step 1: Temporarily hide the current OmniBox window on the macOS AppKit Main Thread
@@ -4055,6 +4122,9 @@ fn main() {
             kv_storage_put,
             vault_encrypt_payload,
             vault_decrypt_payload,
+            check_screen_capture_permission,
+            open_screen_capture_preferences,
+            relaunch_application,
             capture_screen_region_base64,
             read_clipboard_image_base64,
             get_local_network_overview,

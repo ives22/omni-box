@@ -4,6 +4,9 @@ import { useLauncherStore } from '@/stores/launcher'
 import {
   TotpEntry,
   captureScreenRegionBase64,
+  checkScreenCapturePermission,
+  openScreenCapturePreferences,
+  relaunchApplication,
   readClipboardImageBase64,
   isTauriEnv
 } from '@/bridge/backend'
@@ -27,6 +30,7 @@ const formCategory = ref('开发平台')
 
 const isScanningScreen = ref(false)
 const isDraggingImage = ref(false)
+const showScreenPermissionModal = ref(false)
 const highlightedEntryId = ref<string | null>(null)
 const fileInputRef = ref<HTMLInputElement | null>(null)
 
@@ -161,6 +165,7 @@ async function processRecognizedPayload(rawText: string, sourceTag = '扫码') {
 
 /**
  * 1. Interactive Crosshair Screen Region QR Scan (Cmd+Shift+S or Scan Button)
+ * Pre-verifies macOS Screen Recording permission BEFORE starting crosshair selection!
  */
 async function handleScreenQrScan() {
   if (isScanningScreen.value) return
@@ -169,6 +174,20 @@ async function handleScreenQrScan() {
     triggerImageFileSelect()
     return
   }
+
+  // Step 0: Check macOS Screen Recording permission upfront so user never gets a non-working crosshair
+  const hasPermission = await checkScreenCapturePermission(true)
+  if (!hasPermission) {
+    showScreenPermissionModal.value = true
+    try {
+      await openScreenCapturePreferences()
+    } catch {
+      // ignore
+    }
+    return
+  }
+
+  showScreenPermissionModal.value = false
 
   try {
     isScanningScreen.value = true
@@ -186,10 +205,43 @@ async function handleScreenQrScan() {
 
     await processRecognizedPayload(qrText, '屏幕扫码')
   } catch (err) {
-    store.showToast(`屏幕扫码失败：${(err as Error).message || '未知错误'}`, 'warning')
+    const errMsg = String((err as Error)?.message || err || '')
+    if (errMsg.includes('SCREEN_PERMISSION_DENIED')) {
+      showScreenPermissionModal.value = true
+      try {
+        await openScreenCapturePreferences()
+      } catch {
+        // ignore
+      }
+      return
+    }
+    store.showToast(`屏幕扫码失败：${errMsg || '未知错误'}`, 'warning')
   } finally {
     isScanningScreen.value = false
   }
+}
+
+async function handleOpenSystemScreenPrefs() {
+  try {
+    await openScreenCapturePreferences()
+    store.showToast('已打开系统「录屏与系统录音」设置页', 'info')
+  } catch {
+    store.showToast('请手动打开「系统设置 -> 隐私与安全性 -> 录屏与系统录音」', 'warning')
+  }
+}
+
+async function handleRecheckPermissionAndScan() {
+  const granted = await checkScreenCapturePermission(false)
+  if (!granted) {
+    store.showToast('macOS 录屏权限开启后需重启软件生效，请点击「重启 OmniBox 生效」', 'warning')
+    return
+  }
+  showScreenPermissionModal.value = false
+  await handleScreenQrScan()
+}
+
+async function handleRelaunchForPermission() {
+  await relaunchApplication()
 }
 
 /**
@@ -485,6 +537,10 @@ onMounted(() => {
     __omniboxPluginInterceptEscape?: () => boolean
   }
   winObj.__omniboxPluginInterceptEscape = () => {
+    if (showScreenPermissionModal.value) {
+      showScreenPermissionModal.value = false
+      return true
+    }
     if (editingEntry.value) {
       editingEntry.value = null
       return true
@@ -1223,6 +1279,145 @@ onUnmounted(() => {
           >
             保存修改 (Enter)
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- macOS Screen Recording Permission Guide Modal                         -->
+    <!-- ===================================================================== -->
+    <div
+      v-if="showScreenPermissionModal"
+      class="absolute inset-0 z-50 flex items-center justify-center bg-slate-950/65 backdrop-blur-xs p-4"
+      @click.self="showScreenPermissionModal = false"
+    >
+      <div
+        class="w-full max-w-[440px] rounded-2xl border p-5 shadow-2xl space-y-4"
+        :class="
+          store.isDark
+            ? 'bg-[#111827] border-slate-800 text-slate-100'
+            : 'bg-white border-slate-200 text-slate-800'
+        "
+      >
+        <div class="flex items-start justify-between">
+          <div class="flex items-center gap-2.5">
+            <div class="w-9 h-9 rounded-xl bg-amber-500/15 text-amber-500 flex items-center justify-center shrink-0">
+              <IconRenderer name="ShieldAlert" :size="18" />
+            </div>
+            <div>
+              <h3 class="text-sm font-bold">需要开启 macOS「录屏与系统录音」权限</h3>
+              <p class="text-[11px] text-slate-400 mt-0.5">
+                未授予屏幕录制权限时，系统无法截取浏览器或应用窗口中的二维码
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            class="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+            @click="showScreenPermissionModal = false"
+          >
+            <IconRenderer name="X" :size="15" />
+          </button>
+        </div>
+
+        <!-- Step-by-step Permission Setup Instructions -->
+        <div
+          class="p-3.5 rounded-xl border text-xs space-y-2.5 leading-relaxed"
+          :class="
+            store.isDark
+              ? 'bg-slate-900/90 border-slate-800 text-slate-300'
+              : 'bg-slate-50 border-slate-200/80 text-slate-700'
+          "
+        >
+          <div class="flex items-start gap-2">
+            <span class="w-4 h-4 rounded-full bg-indigo-500/20 text-indigo-500 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">1</span>
+            <span>点击下方按钮打开系统设置 <strong>「隐私与安全性 -> 录屏与系统录音」</strong>；</span>
+          </div>
+          <div class="flex items-start gap-2">
+            <span class="w-4 h-4 rounded-full bg-indigo-500/20 text-indigo-500 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">2</span>
+            <span>
+              在列表中找到 <strong>OmniBox</strong> 并打开右侧开关
+              <span class="text-amber-500 font-medium">（若开关原本已开启，请先关闭再重新打开一次以刷新版本授权）</span>；
+            </span>
+          </div>
+          <div class="flex items-start gap-2">
+            <span class="w-4 h-4 rounded-full bg-indigo-500/20 text-indigo-500 font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">3</span>
+            <span>开启后点击 <strong>「重启 OmniBox 立即生效」</strong> 即可正常框选扫码。</span>
+          </div>
+        </div>
+
+        <!-- Primary Permission Actions -->
+        <div class="space-y-2 text-xs">
+          <button
+            type="button"
+            class="w-full py-2.5 px-3.5 rounded-xl font-semibold text-white bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700 transition-colors cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+            @click="handleOpenSystemScreenPrefs"
+          >
+            <IconRenderer name="Settings" :size="14" />
+            <span>1. 打开系统「录屏与系统录音」设置</span>
+          </button>
+
+          <div class="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              class="py-2 px-3 rounded-xl font-semibold border cursor-pointer transition-colors flex items-center justify-center gap-1.5"
+              :class="
+                store.isDark
+                  ? 'bg-emerald-500/15 hover:bg-emerald-500/25 border-emerald-500/35 text-emerald-300'
+                  : 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-700'
+              "
+              @click="handleRelaunchForPermission"
+            >
+              <IconRenderer name="RefreshCw" :size="13" />
+              <span>2. 已授权，重启生效</span>
+            </button>
+            <button
+              type="button"
+              class="btn-secondary py-2 flex items-center justify-center gap-1.5"
+              @click="handleRecheckPermissionAndScan"
+            >
+              <IconRenderer name="ScanLine" :size="13" />
+              <span>重新检测并扫码</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Zero-Permission Alternative Entry Points -->
+        <div
+          class="pt-3 border-t space-y-2"
+          :class="store.isDark ? 'border-slate-800' : 'border-slate-200/80'"
+        >
+          <p class="text-[11px] text-slate-400">
+            免权限快捷方式（用微信或系统 <code class="font-mono">⌘⌃⇧4</code> 截图到剪贴板后可直接识别）：
+          </p>
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <button
+              type="button"
+              class="btn-secondary py-1.5 flex items-center justify-center gap-1.5"
+              @click="
+                () => {
+                  showScreenPermissionModal = false
+                  handleSmartClipboardImport()
+                }
+              "
+            >
+              <IconRenderer name="ClipboardPaste" :size="13" />
+              <span>识别剪贴板截图 (⌘V)</span>
+            </button>
+            <button
+              type="button"
+              class="btn-secondary py-1.5 flex items-center justify-center gap-1.5"
+              @click="
+                () => {
+                  showScreenPermissionModal = false
+                  triggerImageFileSelect()
+                }
+              "
+            >
+              <IconRenderer name="ImageUp" :size="13" />
+              <span>选择本地二维码图片</span>
+            </button>
+          </div>
         </div>
       </div>
     </div>

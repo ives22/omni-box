@@ -1135,6 +1135,38 @@ export function installUtoolsGlobalShim(onCopyNotification?: (text: string) => v
 }
 
 /**
+ * Check whether OmniBox currently has macOS Screen Recording permission (`CGPreflightScreenCaptureAccess`).
+ */
+export async function checkScreenCapturePermission(promptIfNeeded = false): Promise<boolean> {
+  if (isTauriEnv()) {
+    try {
+      return await invoke<boolean>('check_screen_capture_permission', { promptIfNeeded })
+    } catch {
+      return false
+    }
+  }
+  return true
+}
+
+/**
+ * Open macOS System Settings -> Privacy & Security -> Screen & System Audio Recording directly.
+ */
+export async function openScreenCapturePreferences(): Promise<void> {
+  if (isTauriEnv()) {
+    await invoke('open_screen_capture_preferences')
+  }
+}
+
+/**
+ * Relaunch OmniBox application so newly granted macOS TCC permissions take effect immediately.
+ */
+export async function relaunchApplication(): Promise<void> {
+  if (isTauriEnv()) {
+    await invoke('relaunch_application')
+  }
+}
+
+/**
  * Trigger interactive macOS crosshair screen region selection (`screencapture -i -x`),
  * automatically hiding and restoring the current OmniBox window so underlying QR codes are never obscured.
  */
