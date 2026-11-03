@@ -104,6 +104,70 @@ async function processRecognizedPayload(rawText: string, sourceTag = '扫码') {
     return
   }
 
+  // Case 0: Multi-account batch import (e.g. Google Authenticator `otpauth-migration://offline?data=...`)
+  if (parsed.batchItems && parsed.batchItems.length > 1) {
+    const existingSecretSet = new Set(
+      store.totpEntries.map((item) => sanitizeBase32Secret(item.secret))
+    )
+    const addedEntries: TotpEntry[] = []
+    let skippedCount = 0
+    const nowBase = Date.now()
+
+    parsed.batchItems.forEach((candidate, idx) => {
+      const cleanSec = sanitizeBase32Secret(candidate.secret)
+      if (!cleanSec) return
+      if (existingSecretSet.has(cleanSec)) {
+        skippedCount++
+        return
+      }
+      existingSecretSet.add(cleanSec)
+      addedEntries.push({
+        id: `totp-${nowBase}-${idx}`,
+        issuer: candidate.issuer || 'Google 导入令牌',
+        account: candidate.account || 'default@account',
+        secret: cleanSec,
+        period: candidate.period || 30,
+        digits: candidate.digits || 6,
+        category:
+          candidate.category ||
+          inferCategoryFromIssuer(candidate.issuer || '', candidate.account || '')
+      })
+    })
+
+    const batchSuffix =
+      parsed.batchInfo && parsed.batchInfo.batchSize > 1
+        ? `（第 ${parsed.batchInfo.batchIndex + 1}/${parsed.batchInfo.batchSize} 批）`
+        : ''
+
+    if (addedEntries.length === 0) {
+      const firstExisting = store.totpEntries.find(
+        (item) => sanitizeBase32Secret(item.secret) === sanitizeBase32Secret(parsed.secret)
+      )
+      if (firstExisting) {
+        flashHighlightCard(firstExisting.id)
+      }
+      store.showToast(
+        `二维码中的 ${parsed.batchItems.length} 个 2FA 令牌均已存在，无需重复添加${batchSuffix}`,
+        'info'
+      )
+      return
+    }
+
+    await store.saveTotpEntries([...addedEntries, ...store.totpEntries])
+    formIssuer.value = ''
+    formAccount.value = ''
+    formSecret.value = ''
+    otpauthUriInput.value = ''
+    showAddModal.value = false
+    flashHighlightCard(addedEntries[0]!.id)
+
+    const skipNote = skippedCount > 0 ? `，已跳过 ${skippedCount} 个重复令牌` : ''
+    store.showToast(
+      `Google 验证器批量导入成功：新增 ${addedEntries.length} 个令牌${skipNote}${batchSuffix}`
+    )
+    return
+  }
+
   // 1. Check duplicate secret to prevent redundant cards
   const existing = store.totpEntries.find(
     (item) => sanitizeBase32Secret(item.secret) === parsed.secret
@@ -386,10 +450,10 @@ async function handleGlobalPasteEvent(e: ClipboardEvent) {
     }
   }
 
-  // 2. If user is typing inside an input box (except pasting full otpauth:// URI into otpauthUriInput), let normal input work
+  // 2. If user is typing inside an input box (except pasting full otpauth:// or otpauth-migration:// URI), let normal input work
   const pastedText = e.clipboardData?.getData('text/plain')?.trim() || ''
   if (isEditingInput) {
-    if (/^otpauth:\/\//i.test(pastedText)) {
+    if (/^otpauth(-migration)?:\/\//i.test(pastedText)) {
       e.preventDefault()
       await processRecognizedPayload(pastedText, '粘贴链接')
     }
@@ -397,7 +461,7 @@ async function handleGlobalPasteEvent(e: ClipboardEvent) {
   }
 
   // 3. When not focused in an input box, pressing Cmd+V anywhere in 2FA plugin triggers smart paste
-  if (pastedText && (/^otpauth:\/\//i.test(pastedText) || pastedText.length >= 12)) {
+  if (pastedText && (/^otpauth(-migration)?:\/\//i.test(pastedText) || pastedText.length >= 12)) {
     e.preventDefault()
     await processRecognizedPayload(pastedText, '粘贴导入')
     return

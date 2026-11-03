@@ -2446,13 +2446,32 @@ fn decode_qr_bytes_macos(image_bytes: &[u8]) -> Option<String> {
 
         let sel_utf8 = sel_registerName(b"stringWithUTF8String:\0".as_ptr() as _);
         let qr_type = send_id_ptr(cls_str, sel_utf8, b"CIDetectorTypeQRCode\0".as_ptr() as _);
+
+        let cls_dict = objc_getClass(b"NSDictionary\0".as_ptr() as _);
+        let opts_dict = if !cls_dict.is_null() {
+            let send_dict: unsafe extern "C" fn(
+                *mut c_void,
+                *mut c_void,
+                *mut c_void,
+                *mut c_void,
+            ) -> *mut c_void = std::mem::transmute(objc_msgSend as *const ());
+            let sel_dict_obj_key =
+                sel_registerName(b"dictionaryWithObject:forKey:\0".as_ptr() as _);
+            let k_acc = send_id_ptr(cls_str, sel_utf8, b"CIDetectorAccuracy\0".as_ptr() as _);
+            let v_high =
+                send_id_ptr(cls_str, sel_utf8, b"CIDetectorAccuracyHigh\0".as_ptr() as _);
+            send_dict(cls_dict, sel_dict_obj_key, v_high, k_acc)
+        } else {
+            std::ptr::null_mut()
+        };
+
         let sel_detector = sel_registerName(b"detectorOfType:context:options:\0".as_ptr() as _);
         let detector = send_detector(
             cls_ci_detector,
             sel_detector,
             qr_type,
             std::ptr::null_mut(),
-            std::ptr::null_mut(),
+            opts_dict,
         );
         if detector.is_null() {
             return None;
