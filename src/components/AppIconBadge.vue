@@ -69,6 +69,9 @@ const gradientStyle = computed(() => {
   if (id.includes('ip-studio')) {
     return 'bg-gradient-to-br from-cyan-400 via-teal-500 to-indigo-600 text-white shadow-sm shadow-cyan-500/20'
   }
+  if (id.includes('port-studio')) {
+    return 'bg-gradient-to-br from-emerald-500 via-teal-500 to-sky-600 text-white shadow-sm shadow-teal-500/20'
+  }
   if (id.includes('unit-converter')) {
     return 'bg-gradient-to-br from-indigo-500 via-blue-500 to-emerald-500 text-white shadow-sm shadow-indigo-500/20'
   }

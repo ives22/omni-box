@@ -321,6 +321,32 @@ export const CORE_PLUGIN_ITEMS: Omit<SearchResultItem, 'score' | 'match_type'>[]
     badge: '内置极速'
   },
   {
+    id: 'plugin:port-studio',
+    title: '端口与进程管理 (Port Studio)',
+    subtitle: '实时监控 macOS 监听端口 (TCP/UDP)、定位所属应用与项目目录、查看 CPU/内存并一键终止占用进程',
+    category: 'plugin',
+    icon: 'Server',
+    keywords: [
+      'port',
+      'lsof',
+      'kill',
+      'netstat',
+      'process',
+      'pid',
+      'listen',
+      '端口',
+      '端口占用',
+      '进程',
+      '杀进程',
+      '监听',
+      'dk',
+      'dkgl',
+      'jc'
+    ],
+    action_payload: 'port-studio',
+    badge: '内置极速'
+  },
+  {
     id: 'plugin:unit-converter',
     title: '换算与格式工作台 (Unit & Format Studio)',
     subtitle: '长度/面积/体积/质量/温度/时间/速度/数据存储全量同屏换算，以及时间戳/颜色/Base64/财务大写转换',
@@ -1255,6 +1281,126 @@ export interface PublicIpGeoInfo {
   longitude: string
   sourceName: string
   latencyMs: number
+}
+
+export interface PortListenEntry {
+  id: string
+  port: number
+  protocol: 'TCP' | 'UDP' | string
+  ipVersion: string
+  bindAddr: string
+  rawEndpoint: string
+  isPublicExposed: boolean
+  pid: number
+  ppid: number
+  processName: string
+  displayName: string
+  category: 'web' | 'database' | 'app' | 'system' | string
+  user: string
+  cpuPercent: number
+  memoryMb: number
+  elapsedTime: string
+  executablePath: string
+  commandArgs: string
+  cwd: string
+  isSystemProtected: boolean
+  siblingPorts: number[]
+}
+
+export async function fetchListeningPorts(includeUdp = false): Promise<PortListenEntry[]> {
+  if (isTauriEnv()) {
+    return await invoke<PortListenEntry[]>('scan_listening_ports', { includeUdp })
+  }
+  return [
+    {
+      id: 'TCP:5173:48210',
+      port: 5173,
+      protocol: 'TCP',
+      ipVersion: 'IPv4/v6',
+      bindAddr: '0.0.0.0',
+      rawEndpoint: '0.0.0.0:5173',
+      isPublicExposed: true,
+      pid: 48210,
+      ppid: 1204,
+      processName: 'node',
+      displayName: 'Node.js · Vite 开发服 (omni-box)',
+      category: 'web',
+      user: 'liyj',
+      cpuPercent: 1.8,
+      memoryMb: 118.4,
+      elapsedTime: '1小时 24分',
+      executablePath: '/opt/homebrew/bin/node',
+      commandArgs: 'node /Users/liyj/workspace/omni-box/node_modules/.bin/vite --host',
+      cwd: '/Users/liyj/workspace/omni-box',
+      isSystemProtected: false,
+      siblingPorts: [5173, 24678]
+    },
+    {
+      id: 'TCP:8080:51920',
+      port: 8080,
+      protocol: 'TCP',
+      ipVersion: 'IPv4',
+      bindAddr: '127.0.0.1',
+      rawEndpoint: '127.0.0.1:8080',
+      isPublicExposed: false,
+      pid: 51920,
+      ppid: 1,
+      processName: 'go',
+      displayName: 'Go 服务进程 (api-gateway)',
+      category: 'web',
+      user: 'liyj',
+      cpuPercent: 0.4,
+      memoryMb: 42.6,
+      elapsedTime: '45分 12秒',
+      executablePath: '/Users/liyj/go/bin/api-gateway',
+      commandArgs: './bin/api-gateway --port 8080 --env dev',
+      cwd: '/Users/liyj/workspace/api-gateway',
+      isSystemProtected: false,
+      siblingPorts: [8080]
+    },
+    {
+      id: 'TCP:6379:912',
+      port: 6379,
+      protocol: 'TCP',
+      ipVersion: 'IPv4',
+      bindAddr: '127.0.0.1',
+      rawEndpoint: '127.0.0.1:6379',
+      isPublicExposed: false,
+      pid: 912,
+      ppid: 1,
+      processName: 'redis-server',
+      displayName: 'Redis 缓存服务 (redis-server)',
+      category: 'database',
+      user: 'liyj',
+      cpuPercent: 0.1,
+      memoryMb: 14.2,
+      elapsedTime: '3天 12小时',
+      executablePath: '/opt/homebrew/opt/redis/bin/redis-server',
+      commandArgs: '/opt/homebrew/opt/redis/bin/redis-server 127.0.0.1:6379',
+      cwd: '/opt/homebrew/var/db/redis',
+      isSystemProtected: false,
+      siblingPorts: [6379]
+    }
+  ]
+}
+
+export async function killPortProcess(
+  pid: number,
+  force = false,
+  useAdmin = false
+): Promise<string> {
+  if (isTauriEnv()) {
+    return await invoke<string>('kill_port_process', { pid, force, useAdmin })
+  }
+  return `已模拟向进程 (PID ${pid}) 发送 ${force ? 'SIGKILL (-9)' : 'SIGTERM (-15)'} 信号`
+}
+
+export async function openUrlInSystemBrowser(url: string): Promise<void> {
+  if (isTauriEnv()) {
+    await invoke('open_url_in_browser', { url })
+    return
+  }
+  window.open(url, '_blank', 'noopener,noreferrer')
 }
 
 export async function fetchLocalNetworkOverview(): Promise<LocalNetworkOverview> {

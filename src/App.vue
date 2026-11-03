@@ -16,6 +16,7 @@ import DiffViewer from '@/plugins/diff-viewer/DiffViewer.vue'
 import Authenticator from '@/plugins/authenticator/Authenticator.vue'
 import PasswordVault from '@/plugins/password-vault/PasswordVault.vue'
 import IpStudio from '@/plugins/ip-studio/IpStudio.vue'
+import PortStudio from '@/plugins/port-studio/PortStudio.vue'
 import UnitConverter from '@/plugins/unit-converter/UnitConverter.vue'
 import UtoolsHub from '@/plugins/utools-hub/UtoolsHub.vue'
 import AiStudio from '@/plugins/ai-studio/AiStudio.vue'
@@ -279,9 +280,10 @@ function handleGlobalKeydown(e: KeyboardEvent) {
       '4': 'authenticator',
       '5': 'password-vault',
       '6': 'ip-studio',
-      '7': 'unit-converter',
-      '8': 'utools-hub',
+      '7': 'port-studio',
+      '8': 'unit-converter',
       '9': 'ai-studio',
+      '0': 'utools-hub',
       ',': 'user-center'
     }
     const lowerKey = e.key.toLowerCase()
@@ -830,6 +832,7 @@ onUnmounted(() => {
         <Authenticator v-else-if="store.activePluginId === 'authenticator'" />
         <PasswordVault v-else-if="store.activePluginId === 'password-vault'" />
         <IpStudio v-else-if="store.activePluginId === 'ip-studio'" />
+        <PortStudio v-else-if="store.activePluginId === 'port-studio'" />
         <UnitConverter v-else-if="store.activePluginId === 'unit-converter'" />
         <UtoolsHub
           v-else-if="

@@ -1048,6 +1048,35 @@ fn build_core_items(sys_apps: &[SearchableItem]) -> Vec<SearchableItem> {
             "ip-studio",
         ),
         SearchableItem::new(
+            "plugin:port-studio",
+            "端口与进程管理 (Port Studio)",
+            "实时监控 macOS 监听端口 (TCP/UDP)、定位所属应用与项目目录、查看 CPU/内存并一键终止占用进程",
+            "plugin",
+            "Server",
+            None,
+            vec![
+                "port",
+                "lsof",
+                "kill",
+                "netstat",
+                "process",
+                "pid",
+                "listen",
+                "端口",
+                "端口占用",
+                "进程",
+                "杀进程",
+                "监听",
+                "dk",
+                "dkgl",
+                "jc",
+            ]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+            "port-studio",
+        ),
+        SearchableItem::new(
             "plugin:unit-converter",
             "换算与格式工作台 (Unit & Format Studio)",
             "长度/面积/体积/质量/温度/时间/速度/数据存储全量同屏换算，以及时间戳/颜色/Base64/财务大写转换",
@@ -3090,6 +3119,732 @@ async fn get_local_network_overview() -> Result<LocalNetworkOverview, String> {
     .map_err(|e| e.to_string())?
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortListenEntry {
+    pub id: String,
+    pub port: u16,
+    pub protocol: String,
+    pub ip_version: String,
+    pub bind_addr: String,
+    pub raw_endpoint: String,
+    pub is_public_exposed: bool,
+    pub pid: u32,
+    pub ppid: u32,
+    pub process_name: String,
+    pub display_name: String,
+    pub category: String, // "web" | "database" | "app" | "system"
+    pub user: String,
+    pub cpu_percent: f32,
+    pub memory_mb: f32,
+    pub elapsed_time: String,
+    pub executable_path: String,
+    pub command_args: String,
+    pub cwd: String,
+    pub is_system_protected: bool,
+    pub sibling_ports: Vec<u16>,
+}
+
+fn format_ps_etime(raw: &str) -> String {
+    let s = raw.trim();
+    if s.is_empty() {
+        return "-".to_string();
+    }
+    // ps etime format on macOS: [[dd-]hh:]mm:ss
+    if let Some((days_str, time_str)) = s.split_once('-') {
+        let parts: Vec<&str> = time_str.split(':').collect();
+        if parts.len() == 3 {
+            return format!("{}天 {}小时", days_str, parts[0].trim_start_matches('0').max("0"));
+        }
+        return format!("{}天 {}", days_str, time_str);
+    }
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() == 3 {
+        let h = parts[0].parse::<u32>().unwrap_or(0);
+        let m = parts[1].parse::<u32>().unwrap_or(0);
+        if h > 0 {
+            return format!("{}小时 {}分", h, m);
+        }
+        return format!("{}分 {}秒", m, parts[2].parse::<u32>().unwrap_or(0));
+    } else if parts.len() == 2 {
+        let m = parts[0].parse::<u32>().unwrap_or(0);
+        let sec = parts[1].parse::<u32>().unwrap_or(0);
+        if m > 0 {
+            return format!("{}分 {:02}秒", m, sec);
+        }
+        return format!("{}秒", sec);
+    }
+    s.to_string()
+}
+
+fn resolve_port_process_identity(
+    port: u16,
+    process_name: &str,
+    command_args: &str,
+    cwd: &str,
+    pid: u32,
+) -> (String, String, String, bool) {
+    let self_pid = std::process::id();
+    let proc_lower = process_name.to_lowercase();
+    let args_lower = command_args.to_lowercase();
+
+    // Extract executable path from command_args
+    let executable_path = if let Some(idx) = command_args.find(".app/Contents/MacOS/") {
+        let after_macos = &command_args[idx + ".app/Contents/MacOS/".len()..];
+        let bin_end = after_macos.find(' ').unwrap_or(after_macos.len());
+        command_args[..idx + ".app/Contents/MacOS/".len() + bin_end].to_string()
+    } else {
+        command_args
+            .split_whitespace()
+            .next()
+            .unwrap_or(process_name)
+            .to_string()
+    };
+
+    // Extract project folder name if cwd is inside a user directory
+    let project_folder = if !cwd.is_empty() && cwd != "/" && cwd.starts_with("/Users/") {
+        let trimmed = cwd.trim_end_matches('/');
+        let parts: Vec<&str> = trimmed.split('/').collect();
+        // Only treat as project folder if deeper than /Users/<username>
+        if parts.len() > 3 {
+            parts.last().copied().unwrap_or("")
+        } else {
+            ""
+        }
+    } else {
+        ""
+    };
+
+    if pid == self_pid || proc_lower.contains("omni-box") || args_lower.contains("omnibox.app") {
+        return (
+            "OmniBox (当前应用)".to_string(),
+            "app".to_string(),
+            executable_path,
+            true,
+        );
+    }
+
+    // 1. Check macOS System Daemons first
+    match proc_lower.as_str() {
+        "rapportd" => {
+            return (
+                "rapportd (Apple 接力与隔空投送)".to_string(),
+                "system".to_string(),
+                executable_path,
+                true,
+            )
+        }
+        "controlcenter" => {
+            return (
+                "ControlCenter (系统控制中心 / AirPlay)".to_string(),
+                "system".to_string(),
+                executable_path,
+                true,
+            )
+        }
+        "sharingd" => {
+            return (
+                "sharingd (macOS 共享与隔空投送)".to_string(),
+                "system".to_string(),
+                executable_path,
+                true,
+            )
+        }
+        "mdnsresponder" => {
+            return (
+                "mDNSResponder (Bonjour 局域网发现)".to_string(),
+                "system".to_string(),
+                executable_path,
+                true,
+            )
+        }
+        "airplayxpchelper" => {
+            return (
+                "AirPlayXPCHelper (系统隔空播放服务)".to_string(),
+                "system".to_string(),
+                executable_path,
+                true,
+            )
+        }
+        "launchd" | "windowserver" | "kernel_task" | "configd" | " symptomsd" => {
+            return (
+                format!("{} (macOS 系统核心服务)", process_name),
+                "system".to_string(),
+                executable_path,
+                true,
+            )
+        }
+        _ => {}
+    }
+
+    if executable_path.starts_with("/System/") || executable_path.starts_with("/usr/libexec/") {
+        return (
+            format!("{} (macOS 系统服务)", process_name),
+            "system".to_string(),
+            executable_path,
+            true,
+        );
+    }
+
+    // 2. Check Databases, Containers & Middleware
+    if proc_lower.contains("redis") || port == 6379 {
+        return (
+            "Redis 缓存服务 (redis-server)".to_string(),
+            "database".to_string(),
+            executable_path,
+            false,
+        );
+    }
+    if proc_lower.contains("mysqld") || proc_lower.contains("mariadbd") || port == 3306 || port == 33060 {
+        return (
+            "MySQL / MariaDB 数据库".to_string(),
+            "database".to_string(),
+            executable_path,
+            false,
+        );
+    }
+    if proc_lower.contains("postgres") || port == 5432 {
+        return (
+            "PostgreSQL 数据库".to_string(),
+            "database".to_string(),
+            executable_path,
+            false,
+        );
+    }
+    if proc_lower.contains("mongod") || port == 27017 {
+        return (
+            "MongoDB 数据库".to_string(),
+            "database".to_string(),
+            executable_path,
+            false,
+        );
+    }
+    if proc_lower.contains("ollama") || port == 11434 {
+        return (
+            "Ollama 本地大模型服务".to_string(),
+            "database".to_string(),
+            executable_path,
+            false,
+        );
+    }
+    if proc_lower.contains("docker")
+        || args_lower.contains("docker.app")
+        || proc_lower.contains("orbstack")
+        || proc_lower.contains("vpnkit")
+    {
+        return (
+            "Docker / 容器端口映射".to_string(),
+            "database".to_string(),
+            executable_path,
+            false,
+        );
+    }
+    if proc_lower.contains("elasticsearch") || port == 9200 || port == 9300 {
+        return (
+            "Elasticsearch 搜索引擎".to_string(),
+            "database".to_string(),
+            executable_path,
+            false,
+        );
+    }
+
+    // 3. Check Web Servers & Dev Language Runtimes
+    let is_dev_runtime = matches!(
+        proc_lower.as_str(),
+        "node"
+            | "bun"
+            | "deno"
+            | "python"
+            | "python3"
+            | "Python"
+            | "java"
+            | "go"
+            | "ruby"
+            | "php"
+            | "cargo"
+            | "vite"
+            | "next-server"
+            | "nginx"
+            | "caddy"
+            | "httpd"
+    ) || proc_lower.starts_with("python3.");
+
+    if is_dev_runtime {
+        let mut label = if args_lower.contains("vite") {
+            "Node.js · Vite 开发服".to_string()
+        } else if args_lower.contains("next") {
+            "Node.js · Next.js 服务".to_string()
+        } else if args_lower.contains("nuxt") {
+            "Node.js · Nuxt 服务".to_string()
+        } else if args_lower.contains("webpack") {
+            "Node.js · Webpack Dev".to_string()
+        } else if args_lower.contains("nest") {
+            "Node.js · NestJS 服务".to_string()
+        } else if args_lower.contains("ts-node") || args_lower.contains("tsx") {
+            "Node.js · TypeScript".to_string()
+        } else if args_lower.contains("uvicorn") || args_lower.contains("fastapi") {
+            "Python · FastAPI/Uvicorn".to_string()
+        } else if args_lower.contains("flask") {
+            "Python · Flask 服务".to_string()
+        } else if args_lower.contains("django") {
+            "Python · Django 服务".to_string()
+        } else if args_lower.contains("http.server") {
+            "Python · 静态文件服务".to_string()
+        } else if args_lower.contains("spring") {
+            "Java · Spring Boot".to_string()
+        } else if proc_lower == "nginx" {
+            "Nginx Web 服务器".to_string()
+        } else if proc_lower == "caddy" {
+            "Caddy Web 服务器".to_string()
+        } else if proc_lower.starts_with("python") {
+            "Python 服务进程".to_string()
+        } else if proc_lower == "node" {
+            "Node.js 服务进程".to_string()
+        } else if proc_lower == "java" {
+            "Java 服务进程".to_string()
+        } else if proc_lower == "go" {
+            "Go 服务进程".to_string()
+        } else {
+            format!("{} 开发服务", process_name)
+        };
+
+        if !project_folder.is_empty() {
+            label = format!("{} ({})", label, project_folder);
+        }
+        return (label, "web".to_string(), executable_path, false);
+    }
+
+    // 4. Check macOS .app Bundles in command_args
+    if let Some(app_idx) = command_args.find(".app/") {
+        let prefix = &command_args[..app_idx];
+        if let Some(slash_idx) = prefix.rfind('/') {
+            let app_bundle_name = &prefix[slash_idx + 1..];
+            let app_lower = app_bundle_name.to_lowercase();
+            let friendly_app = if app_lower.contains("wechatwebdevtools")
+                || app_lower.contains("wechatdevtools")
+            {
+                "微信开发者工具".to_string()
+            } else if app_lower == "wechat" {
+                "微信 (WeChat)".to_string()
+            } else if app_lower.contains("dingtalk") {
+                "钉钉 (DingTalk)".to_string()
+            } else if app_lower.contains("feishu") || app_lower.contains("lark") {
+                "飞书 (Feishu)".to_string()
+            } else if app_lower.contains("antigravity") {
+                "Antigravity".to_string()
+            } else if app_lower.contains("cursor") {
+                "Cursor 编辑器".to_string()
+            } else if app_lower.contains("visual studio code") || app_lower == "code" {
+                "VS Code".to_string()
+            } else if app_lower.contains("clash")
+                || app_lower.contains("verge")
+                || app_lower.contains("surge")
+                || app_lower.contains("v2ray")
+            {
+                format!("{} (代理客户端)", app_bundle_name)
+            } else {
+                app_bundle_name.to_string()
+            };
+            return (friendly_app, "app".to_string(), executable_path, false);
+        }
+    }
+
+    // 5. Well-known web ports fallback
+    let is_common_web_port = matches!(
+        port,
+        80 | 443 | 3000..=3010 | 4000 | 4200 | 5000 | 5173..=5180 | 7000 | 8000 | 8080..=8090 | 8888 | 9000
+    );
+    let cat = if is_common_web_port {
+        "web"
+    } else if pid < 300 {
+        "system"
+    } else {
+        "app"
+    };
+
+    let display = if !project_folder.is_empty() {
+        format!("{} ({})", process_name, project_folder)
+    } else {
+        process_name.to_string()
+    };
+
+    (display, cat.to_string(), executable_path, pid <= 1)
+}
+
+#[tauri::command]
+async fn scan_listening_ports(include_udp: Option<bool>) -> Result<Vec<PortListenEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<Vec<PortListenEntry>, String> {
+        use std::collections::{BTreeSet, HashMap};
+
+        #[derive(Clone)]
+        struct RawPortRecord {
+            pid: u32,
+            process_name: String,
+            user: String,
+            protocol: String,
+            ip_version: String,
+            bind_addr: String,
+            port: u16,
+        }
+
+        let mut raw_records: Vec<RawPortRecord> = Vec::new();
+        let mut unique_pids: BTreeSet<u32> = BTreeSet::new();
+
+        let mut parse_lsof_output = |stdout_bytes: &[u8], proto_label: &str| {
+            let text = String::from_utf8_lossy(stdout_bytes);
+            let mut cur_pid: u32 = 0;
+            let mut cur_cmd = String::new();
+            let mut cur_user = String::new();
+            let mut cur_ipv = "IPv4".to_string();
+
+            for line in text.lines() {
+                if line.is_empty() {
+                    continue;
+                }
+                let tag = line.chars().next().unwrap_or(' ');
+                let val = &line[tag.len_utf8()..];
+                match tag {
+                    'p' => {
+                        cur_pid = val.trim().parse::<u32>().unwrap_or(0);
+                    }
+                    'c' => {
+                        cur_cmd = val.replace("\\x20", " ").trim().to_string();
+                    }
+                    'L' => {
+                        cur_user = val.trim().to_string();
+                    }
+                    't' => {
+                        if val.contains("IPv6") {
+                            cur_ipv = "IPv6".to_string();
+                        } else if val.contains("IPv4") {
+                            cur_ipv = "IPv4".to_string();
+                        }
+                    }
+                    'n' => {
+                        if cur_pid == 0 {
+                            continue;
+                        }
+                        // Ignore active outbound connections (`->`) or unbound wildcard (`*:*`)
+                        if val.contains("->") || val.ends_with(":*") {
+                            continue;
+                        }
+                        if let Some((addr_part, port_part)) = val.rsplit_once(':') {
+                            if let Ok(port_num) = port_part.trim().parse::<u16>() {
+                                if port_num == 0 {
+                                    continue;
+                                }
+                                unique_pids.insert(cur_pid);
+                                raw_records.push(RawPortRecord {
+                                    pid: cur_pid,
+                                    process_name: if cur_cmd.is_empty() {
+                                        "unknown".to_string()
+                                    } else {
+                                        cur_cmd.clone()
+                                    },
+                                    user: if cur_user.is_empty() {
+                                        "-".to_string()
+                                    } else {
+                                        cur_user.clone()
+                                    },
+                                    protocol: proto_label.to_string(),
+                                    ip_version: cur_ipv.clone(),
+                                    bind_addr: addr_part.trim().to_string(),
+                                    port: port_num,
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        };
+
+        // 1. Scan TCP LISTEN ports (fast ~50ms)
+        if let Ok(out) = Command::new("/usr/sbin/lsof")
+            .args(["-iTCP", "-sTCP:LISTEN", "-P", "-n", "-F", "pcnTuL"])
+            .output()
+        {
+            parse_lsof_output(&out.stdout, "TCP");
+        }
+
+        // 2. Optionally scan bound UDP sockets
+        if include_udp.unwrap_or(false) {
+            if let Ok(out) = Command::new("/usr/sbin/lsof")
+                .args(["-iUDP", "-P", "-n", "-F", "pcnTuL"])
+                .output()
+            {
+                parse_lsof_output(&out.stdout, "UDP");
+            }
+        }
+
+        if raw_records.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // 3. Batch enrich process details via a single `ps` call and a single `lsof -d cwd` call
+        let pids_csv: String = unique_pids
+            .iter()
+            .map(|p| p.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        struct PsMeta {
+            ppid: u32,
+            cpu_percent: f32,
+            memory_mb: f32,
+            elapsed_time: String,
+            command_args: String,
+        }
+
+        let mut ps_map: HashMap<u32, PsMeta> = HashMap::new();
+        if let Ok(ps_out) = Command::new("/bin/ps")
+            .args([
+                "-ww",
+                "-p",
+                &pids_csv,
+                "-o",
+                "pid=,ppid=,%cpu=,rss=,etime=,args=",
+            ])
+            .output()
+        {
+            let ps_text = String::from_utf8_lossy(&ps_out.stdout);
+            for line in ps_text.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let mut iter = trimmed.split_whitespace();
+                let pid = iter.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+                let ppid = iter.next().and_then(|s| s.parse::<u32>().ok()).unwrap_or(0);
+                let cpu = iter
+                    .next()
+                    .and_then(|s| s.replace(',', ".").parse::<f32>().ok())
+                    .unwrap_or(0.0);
+                let rss_kb = iter.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+                let etime_raw = iter.next().unwrap_or("");
+                let args: String = iter.collect::<Vec<&str>>().join(" ");
+                if pid > 0 {
+                    ps_map.insert(
+                        pid,
+                        PsMeta {
+                            ppid,
+                            cpu_percent: (cpu * 10.0).round() / 10.0,
+                            memory_mb: ((rss_kb as f32 / 1024.0) * 10.0).round() / 10.0,
+                            elapsed_time: format_ps_etime(etime_raw),
+                            command_args: args,
+                        },
+                    );
+                }
+            }
+        }
+
+        let mut cwd_map: HashMap<u32, String> = HashMap::new();
+        if let Ok(cwd_out) = Command::new("/usr/sbin/lsof")
+            .args(["-a", "-p", &pids_csv, "-d", "cwd", "-F", "pn"])
+            .output()
+        {
+            let cwd_text = String::from_utf8_lossy(&cwd_out.stdout);
+            let mut c_pid: u32 = 0;
+            for line in cwd_text.lines() {
+                if let Some(p_str) = line.strip_prefix('p') {
+                    c_pid = p_str.trim().parse::<u32>().unwrap_or(0);
+                } else if let Some(n_str) = line.strip_prefix('n') {
+                    if c_pid > 0 {
+                        cwd_map.insert(c_pid, n_str.trim().to_string());
+                    }
+                }
+            }
+        }
+
+        // Build sibling ports map per PID
+        let mut pid_ports_map: HashMap<u32, BTreeSet<u16>> = HashMap::new();
+        for rec in &raw_records {
+            pid_ports_map.entry(rec.pid).or_default().insert(rec.port);
+        }
+
+        // Deduplicate & merge dual-stack (IPv4 + IPv6) listeners on the same (protocol, port, pid)
+        let mut merged_map: HashMap<(String, u16, u32), PortListenEntry> = HashMap::new();
+
+        for rec in raw_records {
+            let key = (rec.protocol.clone(), rec.port, rec.pid);
+            let is_wildcard = rec.bind_addr == "*"
+                || rec.bind_addr == "0.0.0.0"
+                || rec.bind_addr == "[::]"
+                || rec.bind_addr == "::";
+
+            if let Some(existing) = merged_map.get_mut(&key) {
+                if is_wildcard {
+                    existing.is_public_exposed = true;
+                }
+                if existing.ip_version != rec.ip_version && !existing.ip_version.contains('/') {
+                    existing.ip_version = "IPv4/v6".to_string();
+                }
+                if is_wildcard && existing.bind_addr == "127.0.0.1" {
+                    existing.bind_addr = "0.0.0.0".to_string();
+                    existing.raw_endpoint = format!("0.0.0.0:{}", rec.port);
+                }
+                continue;
+            }
+
+            let ps_info = ps_map.get(&rec.pid);
+            let cmd_args = ps_info
+                .map(|m| m.command_args.clone())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| rec.process_name.clone());
+            let cwd = cwd_map.get(&rec.pid).cloned().unwrap_or_default();
+
+            let (display_name, category, executable_path, is_system_protected) =
+                resolve_port_process_identity(
+                    rec.port,
+                    &rec.process_name,
+                    &cmd_args,
+                    &cwd,
+                    rec.pid,
+                );
+
+            let normalized_bind = match rec.bind_addr.as_str() {
+                "*" => "0.0.0.0".to_string(),
+                "[::1]" => "::1".to_string(),
+                "[::]" => "::".to_string(),
+                other => other.to_string(),
+            };
+
+            let sibling_ports: Vec<u16> = pid_ports_map
+                .get(&rec.pid)
+                .map(|set| set.iter().copied().collect())
+                .unwrap_or_else(|| vec![rec.port]);
+
+            let entry = PortListenEntry {
+                id: format!("{}:{}:{}", rec.protocol, rec.port, rec.pid),
+                port: rec.port,
+                protocol: rec.protocol,
+                ip_version: rec.ip_version,
+                bind_addr: normalized_bind.clone(),
+                raw_endpoint: format!("{}:{}", normalized_bind, rec.port),
+                is_public_exposed: is_wildcard,
+                pid: rec.pid,
+                ppid: ps_info.map(|m| m.ppid).unwrap_or(1),
+                process_name: rec.process_name,
+                display_name,
+                category,
+                user: rec.user,
+                cpu_percent: ps_info.map(|m| m.cpu_percent).unwrap_or(0.0),
+                memory_mb: ps_info.map(|m| m.memory_mb).unwrap_or(0.0),
+                elapsed_time: ps_info
+                    .map(|m| m.elapsed_time.clone())
+                    .unwrap_or_else(|| "-".to_string()),
+                executable_path,
+                command_args: cmd_args,
+                cwd,
+                is_system_protected,
+                sibling_ports,
+            };
+
+            merged_map.insert(key, entry);
+        }
+
+        let mut result: Vec<PortListenEntry> = merged_map.into_values().collect();
+        result.sort_by(|a, b| {
+            let cat_rank = |c: &str| match c {
+                "web" => 0,
+                "database" => 1,
+                "app" => 2,
+                _ => 3,
+            };
+            cat_rank(&a.category)
+                .cmp(&cat_rank(&b.category))
+                .then_with(|| a.port.cmp(&b.port))
+        });
+
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn kill_port_process(
+    pid: u32,
+    force: bool,
+    use_admin: Option<bool>,
+) -> Result<String, String> {
+    if pid <= 1 {
+        return Err("系统内核/初始化进程 (PID <= 1) 受保护，禁止终止".to_string());
+    }
+    if pid == std::process::id() {
+        return Err("不能终止 OmniBox 自身运行进程".to_string());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || -> Result<String, String> {
+        let sig_flag = if force { "-9" } else { "-15" };
+        let sig_name = if force {
+            "SIGKILL (-9 强制终止)"
+        } else {
+            "SIGTERM (-15 优雅停止)"
+        };
+
+        if use_admin.unwrap_or(false) {
+            #[cfg(target_os = "macos")]
+            {
+                let script = format!(
+                    "do shell script \"/bin/kill {} {}\" with administrator privileges",
+                    sig_flag, pid
+                );
+                let out = Command::new("osascript")
+                    .args(["-e", &script])
+                    .output()
+                    .map_err(|e| format!("唤起管理员授权失败: {}", e))?;
+                if !out.status.success() {
+                    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                    if stderr.contains("-128") || stderr.contains("User canceled") {
+                        return Err("已取消管理员授权操作".to_string());
+                    }
+                    return Err(format!("管理员提权终止失败: {}", stderr));
+                }
+                std::thread::sleep(Duration::from_millis(140));
+                return Ok(format!("已通过管理员权限发送 {} 终止进程 (PID {})", sig_name, pid));
+            }
+        }
+
+        let out = Command::new("/bin/kill")
+            .args([sig_flag, &pid.to_string()])
+            .output()
+            .map_err(|e| format!("执行 kill 命令失败: {}", e))?;
+
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+            let lower = stderr.to_lowercase();
+            if lower.contains("operation not permitted") || lower.contains("not owner") {
+                return Err("PERMISSION_DENIED_NEED_ADMIN".to_string());
+            }
+            if lower.contains("no such process") {
+                return Ok(format!("进程 (PID {}) 已退出，端口已释放", pid));
+            }
+            return Err(format!("无法终止进程 (PID {}): {}", pid, stderr));
+        }
+
+        std::thread::sleep(Duration::from_millis(140));
+        Ok(format!("已向进程 (PID {}) 发送 {} 信号", pid, sig_name))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn open_url_in_browser(url: String) -> Result<(), String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("仅支持打开 http:// 或 https:// 链接".to_string());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("无法打开浏览器: {}", e))?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn fetch_url_json_via_curl(url: String) -> Result<String, String> {
     let allowed_hosts = [
@@ -3844,6 +4599,13 @@ fn setup_system_tray(
         )
         .item(
             &MenuItemBuilder::with_id(
+                "open_plugin:port-studio",
+                "📡 端口与进程管理 (Port Studio)",
+            )
+            .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id(
                 "open_plugin:unit-converter",
                 "⚖️ 换算与格式工作台 (Unit & Format)",
             )
@@ -3886,6 +4648,10 @@ fn setup_system_tray(
         )
         .item(
             &MenuItemBuilder::with_id("detach_plugin:ip-studio", "🌐 独立窗口：IP 与网络工作台")
+                .build(app)?,
+        )
+        .item(
+            &MenuItemBuilder::with_id("detach_plugin:port-studio", "📡 独立窗口：端口与进程管理")
                 .build(app)?,
         )
         .item(
@@ -4302,6 +5068,9 @@ fn main() {
             capture_screen_region_base64,
             read_clipboard_image_base64,
             get_local_network_overview,
+            scan_listening_ports,
+            kill_port_process,
+            open_url_in_browser,
             fetch_url_json_via_curl,
             get_system_integration_status,
             ai_chat_completion,

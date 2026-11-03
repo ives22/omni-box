@@ -6,11 +6,14 @@ import {
   SystemAppItem,
   TotpEntry,
   ExternalUtoolsPlugin,
+  PortListenEntry,
   UserSettings,
   DEFAULT_USER_SETTINGS,
   DEFAULT_AI_PROVIDER_PROFILES,
   requestAiChatCompletion,
   fetchAiProviderModels,
+  fetchListeningPorts,
+  killPortProcess,
   queryLauncherItems,
   fetchSystemApps,
   triggerRescanSystemApps,
@@ -136,6 +139,8 @@ export const useLauncherStore = defineStore('launcher', () => {
   const totpEntries = ref<TotpEntry[]>([])
   const totpLiveMap = ref<Record<string, { code: string; remaining: number }>>({})
   const cachedLocalIp = ref<string>('')
+  const cachedListeningPorts = ref<PortListenEntry[]>([])
+  let lastPortsScanAt = 0
   const externalPlugins = ref<ExternalUtoolsPlugin[]>([])
   const activeExternalPlugin = ref<ExternalUtoolsPlugin | null>(null)
   const userSettings = ref<UserSettings>({ ...DEFAULT_USER_SETTINGS })
@@ -630,6 +635,78 @@ export const useLauncherStore = defineStore('launcher', () => {
 
     const finalResults: SearchResultItem[] = []
 
+    // Smart Port Query Detection -> `:3000`, `:8080`, `port 5173`, `kill 3000`, `端口 8080`
+    const portMatch = trimmed.match(/^(?::(\d{1,5})|(?:port|kill|lsof|端口)\s+:?(\d{1,5}))$/i)
+    if (portMatch) {
+      const targetPortNum = Number(portMatch[1] || portMatch[2])
+      if (targetPortNum >= 1 && targetPortNum <= 65535) {
+        // Trigger background refresh of listening ports if cache is older than 2.5s
+        if (Date.now() - lastPortsScanAt > 2500) {
+          lastPortsScanAt = Date.now()
+          fetchListeningPorts(false)
+            .then((list) => {
+              cachedListeningPorts.value = list
+              if (searchQuery.value.trim() === trimmed) {
+                runSearch()
+              }
+            })
+            .catch(() => {})
+        }
+
+        const matchedPortEntries = cachedListeningPorts.value.filter(
+          (p) => p.port === targetPortNum
+        )
+
+        if (matchedPortEntries.length > 0) {
+          for (const pe of matchedPortEntries) {
+            finalResults.push({
+              id: 'quick:port-studio',
+              title: `端口 :${pe.port} 正在监听 · ${pe.displayName} (PID ${pe.pid})`,
+              subtitle: `${pe.protocol} ${pe.rawEndpoint} · 内存 ${pe.memoryMb} MB · 运行 ${pe.elapsedTime} （按 Enter 进入管理）`,
+              category: 'plugin',
+              icon: 'Server',
+              keywords: ['port', String(pe.port)],
+              action_payload: `port:${pe.port}`,
+              score: 9999,
+              match_type: '端口占用',
+              badge: pe.isPublicExposed ? '0.0.0.0 暴露' : '127.0.0.1 本机'
+            })
+
+            if (!pe.isSystemProtected) {
+              finalResults.push({
+                id: 'quick:port-kill',
+                title: `立即释放端口 :${pe.port} — 终止 ${pe.displayName} (PID ${pe.pid})`,
+                subtitle: `向进程 PID ${pe.pid} 发送终止信号并释放 :${pe.port} 端口（按 Enter 立即执行）`,
+                category: 'command',
+                icon: 'OctagonX',
+                keywords: ['kill', String(pe.port)],
+                action_payload: `${pe.pid}:${pe.port}:${pe.displayName}`,
+                score: 9998,
+                match_type: '一键释放',
+                badge: 'Kill 进程'
+              })
+            }
+          }
+        } else {
+          finalResults.push({
+            id: 'quick:port-studio',
+            title: `查询端口 :${targetPortNum} 监听状态`,
+            subtitle:
+              cachedListeningPorts.value.length > 0
+                ? `当前未检测到进程监听 :${targetPortNum} 端口（空闲） · 按 Enter 打开「端口与进程管理」查看全量端口`
+                : `正在扫描本机 :${targetPortNum} 端口占用情况... · 按 Enter 打开「端口与进程管理」`,
+            category: 'plugin',
+            icon: 'Server',
+            keywords: ['port', String(targetPortNum)],
+            action_payload: `port:${targetPortNum}`,
+            score: 9999,
+            match_type: '端口直达',
+            badge: '端口监控'
+          })
+        }
+      }
+    }
+
     // Smart IPv4 / CIDR detection -> Direct jump to IP & Network Studio
     if (/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(trimmed)) {
       finalResults.push({
@@ -851,6 +928,43 @@ export const useLauncherStore = defineStore('launcher', () => {
       return
     }
 
+    if (item.id === 'quick:port-studio') {
+      pluginInitialPayload.value = item.action_payload
+      openPlugin('port-studio')
+      searchQuery.value = ''
+      return
+    }
+
+    if (item.id === 'quick:port-kill') {
+      const [pidStr, portStr, procLabel] = item.action_payload.split(':')
+      const pidNum = Number(pidStr)
+      if (pidNum > 1) {
+        try {
+          await killPortProcess(pidNum, false, false)
+          showToast(`已终止进程 ${procLabel || pidNum} (PID ${pidNum})，端口 :${portStr} 已释放`)
+          lastPortsScanAt = 0
+          cachedListeningPorts.value = await fetchListeningPorts(false)
+          await runSearch()
+        } catch (e) {
+          const errMsg = String((e as Error)?.message || e || '')
+          if (errMsg.includes('PERMISSION_DENIED_NEED_ADMIN')) {
+            try {
+              await killPortProcess(pidNum, true, true)
+              showToast(`已通过管理员权限终止进程 (PID ${pidNum})，端口 :${portStr} 已释放`)
+              lastPortsScanAt = 0
+              cachedListeningPorts.value = await fetchListeningPorts(false)
+              await runSearch()
+            } catch (adminErr) {
+              showToast(`终止失败：${String(adminErr)}`, 'warning')
+            }
+          } else {
+            showToast(`终止失败：${errMsg}`, 'warning')
+          }
+        }
+      }
+      return
+    }
+
     if (item.id === 'quick:unit-converter') {
       pluginInitialPayload.value = item.action_payload
       openPlugin('unit-converter')
@@ -921,6 +1035,7 @@ export const useLauncherStore = defineStore('launcher', () => {
       'authenticator': '按平台名称、账户邮箱或分类筛选 2FA 令牌...',
       'password-vault': '搜索密码本中的网站、账号、备注...',
       'ip-studio': '输入任意公网 IP 查询归属地，或输入 CIDR (如 192.168.1.0/24) 划分子网...',
+      'port-studio': '输入端口号 (如 3000 / 8080)、进程名 (node / redis)、PID 或项目目录过滤...',
       'unit-converter': '输入数值+单位 (如 500g / 100亩 / 1024mb)、时间戳或 #HEX 色值直接换算...',
       'ai-studio': '搜索历史 AI 会话标题或筛选内置 Prompt 角色指令...',
       'utools-hub': '搜索已挂载的 uTools 扩展或输入 plugin.json 配置...',
@@ -1009,6 +1124,7 @@ export const useLauncherStore = defineStore('launcher', () => {
         'authenticator': '2FA 验证码',
         'password-vault': '密码本',
         'ip-studio': 'IP 与网络工作台',
+        'port-studio': '端口与进程管理',
         'unit-converter': '换算与格式工作台',
         'ai-studio': 'AI 助手与指令工作台',
         'utools-hub': 'uTools 插件中心',
@@ -1129,6 +1245,7 @@ export const useLauncherStore = defineStore('launcher', () => {
       'authenticator': { id: 'authenticator', name: '2FA 验证码', icon: 'ShieldCheck', badge: 'TOTP 2FA' },
       'password-vault': { id: 'password-vault', name: '密码本', icon: 'KeyRound', badge: 'AES-256 Vault' },
       'ip-studio': { id: 'ip-studio', name: 'IP 与网络工作台', icon: 'Globe', badge: 'IP & CIDR Studio' },
+      'port-studio': { id: 'port-studio', name: '端口与进程管理', icon: 'Server', badge: 'Port Studio' },
       'unit-converter': { id: 'unit-converter', name: '换算与格式工作台', icon: 'ArrowLeftRight', badge: 'Unit & Format' },
       'ai-studio': { id: 'ai-studio', name: 'AI 助手工作台', icon: 'Sparkles', badge: 'AI Studio' },
       'utools-hub': { id: 'utools-hub', name: 'uTools 插件中心', icon: 'Blocks', badge: '无限制挂载' },

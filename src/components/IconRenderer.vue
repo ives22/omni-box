@@ -71,7 +71,14 @@ import {
   Clock,
   ClipboardCheck,
   Shield,
-  ShieldAlert
+  ShieldAlert,
+  Activity,
+  FolderOpen,
+  OctagonX,
+  Zap,
+  Power,
+  Radio,
+  HardDrive
 } from 'lucide-vue-next'
 
 const props = withDefaults(
@@ -159,7 +166,14 @@ const iconMap: Record<string, unknown> = {
   Clock,
   ClipboardCheck,
   Shield,
-  ShieldAlert
+  ShieldAlert,
+  Activity,
+  FolderOpen,
+  OctagonX,
+  Zap,
+  Power,
+  Radio,
+  HardDrive
 }
 
 const resolvedIcon = computed(() => {
